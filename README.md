@@ -204,6 +204,8 @@ Where the gain comes from (all 114 bugs, full tables in [bench/RESULTS.md](bench
 * What ships is the version chosen on the dev half: only tests that passed count, stack frames are not penalised, and the Ochiai score is softened (exponent 0.25).
 * On the held-out half that adds 2 more bugs at #1 (42% → 46%) and leaves the top 3 unchanged. It is a tie-breaker, not a big signal.
 
+**Tried and not shipped: "the newest change that ran wins".** When the crash site is old and a helper that ran just before it was changed a minute ago, a developer suspects the helper; Blast Radius still ranks the crash site higher, because closeness to the crash outweighs recency. A bonus for the most recently changed function that ran didn't help on real bugs (held-out MRR 0.534 → 0.535). The fixed function is that newest change in 29 of 113 bugs, but 23 of those already rank in the top 3, and in 37 others the newest change is the wrong function, which the bonus would push up. In that situation the helper still shows as a suspect with its reasons ("ran just before the crash", "changed 1m ago").
+
 Reproduce: `node bench/bugsinpy.mjs --jobs 4` (needs `uv`; downloads the projects into `../bench-cache`; a few hours), then `node bench/deeptrace.mjs` and `node bench/deeptrace.mjs --passing` (recordings), `node bench/rescore.mjs`, `node bench/tune.mjs` and `node bench/report.mjs`. After changing the ranking, `node bench/rescore.mjs` re-scores in minutes without re-running any tests.
 
 ## Packaging

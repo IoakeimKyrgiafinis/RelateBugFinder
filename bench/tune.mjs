@@ -48,7 +48,15 @@ function rank(b, P) {
     if (ran === true) prox = Math.max(prox, P.RAN / (1 + c.since / P.SINCE_K)) * (P.SBFL && b.sbfl && !(P.SBFL_OFFSTACK && onStack) ? Math.pow(c.ochiai ?? 0, P.SBFL_POW) : 1);
     else if (ran === false && c.relation !== "crash-site" && c.relation !== "in-stack") prox *= P.NOT_RAN;
     const pen = c.kind === "test" ? P.TEST_PENALTY : 1;
-    scored.push({ id: c.id, s: Math.round(((prox * (P.FLOOR + rec)) / (P.FLOOR + P.DIRTY)) * pen * 1000) / 10 });
+    const key = c.kind === "test" ? -Infinity : c.dirty ? Infinity : c.fnTs ?? -Infinity;
+    scored.push({ id: c.id, s: Math.round(((prox * (P.FLOOR + rec)) / (P.FLOOR + P.DIRTY)) * pen * 1000) / 10, key, ran: ran === true || (P.NEWEST_STACK && onStack) });
+  }
+  // Experiment: the most recently changed (non-test) function that ran in the failing run gets × NEWEST.
+  if (P.NEWEST && P.NEWEST !== 1) {
+    const ranKeys = scored.filter((x) => x.ran && x.key > -Infinity).map((x) => x.key);
+    const newest = ranKeys.length ? Math.max(...ranKeys) : undefined;
+    const window = P.NEWEST_DAYS ? b.asOf - P.NEWEST_DAYS * 86400 : -Infinity;
+    if (newest !== undefined && newest >= window) for (const x of scored) if (x.ran && x.key === newest) x.s *= P.NEWEST;
   }
   scored.sort((a, b) => b.s - a.s);
   const i = scored.findIndex((x) => b.truth.has(x.id));
@@ -96,6 +104,15 @@ for (const SBFL_OFFSTACK of [false, true])
     if (better(m, sbfl.m)) sbfl = { P, m };
   }
 
+// Experiment (not shipped): bonus for the newest change among the functions that ran. The fix is that function in
+// 29 of 113 bugs, but 23 of those already rank top 3 and the bonus promotes the wrong function elsewhere: net ~0.
+const NEW_BASE = { ...SHIPPED, DEEP: true, SBFL: true };
+const newestRows = [];
+for (const NEWEST_STACK of [false]) for (const NEWEST_DAYS of [0, 7]) for (const NEWEST of [1.5, 2, 3]) {
+  const P = { ...NEW_BASE, NEWEST, NEWEST_DAYS, NEWEST_STACK };
+  newestRows.push({ P, dev: metrics(dev, P), held: metrics(held, P) });
+}
+
 const fmt = (m) => `n=${String(m.n).padStart(3)}  top1 ${(100 * m.top1).toFixed(0).padStart(3)}%  top3 ${(100 * m.top3).toFixed(0).padStart(3)}%  top5 ${(100 * m.top5).toFixed(0).padStart(3)}%  MRR ${m.mrr.toFixed(3)}`;
 const show = (label, P) => {
   console.log(`\n${label}: ${JSON.stringify(P)}`);
@@ -117,3 +134,6 @@ for (const [k, vs] of Object.entries({ RAN: [0.3, 0.7], SINCE_K: [5, 50], NOT_RA
   const P = { ...deep.P, [k]: v };
   console.log(`  ${k}=${v}`.padEnd(16), "dev", fmt(metrics(dev, P)), "| held", fmt(metrics(held, P)));
 }
+
+console.log("\nNewest change among functions that ran (experiment; deep + SBFL as shipped):");
+for (const r of newestRows) console.log(`  NEWEST=${r.P.NEWEST} days=${r.P.NEWEST_DAYS || "any"}${r.P.NEWEST_STACK ? " +stack" : ""}`.padEnd(30), "dev", fmt(r.dev), "| held", fmt(r.held));
