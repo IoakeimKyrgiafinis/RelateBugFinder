@@ -1,0 +1,10 @@
+node_modules
+dist
+dist-vsix
+out
+*.vsix
+demo-shop
+.vscode/codegraph.rl*
+.vscode/codegraph.bridge.json
+test/state-*.json
+test/panel.html

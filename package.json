@@ -1,0 +1,172 @@
+{
+  "name": "blast-radius",
+  "version": "0.1.0",
+  "description": "Click a stack trace, get the ranked root-cause suspects. See who breaks before you refactor. A live code graph on Neo4j Relate, exposed to Copilot/Claude/Cursor over MCP.",
+  "main": "./dist/extension.js",
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit -p .",
+    "package": "vsce package",
+    "demo": "bash demo/setup-demo.sh demo-shop",
+    "test:e2e": "node test/e2e.cjs demo-shop demo-shop/trace.txt",
+    "package:all": "node scripts/package-all.mjs"
+  },
+  "keywords": [
+    "stack trace",
+    "root cause",
+    "call graph",
+    "impact analysis",
+    "refactoring",
+    "mcp",
+    "neo4j",
+    "relate",
+    "cypher"
+  ],
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@relate/relate": "^1.1.0",
+    "typescript": "~5.9.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "@types/vscode": "^1.101.0",
+    "@vscode/vsce": "^4.1.1",
+    "esbuild": "^0.28.2",
+    "jsdom": "^31.0.1",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.6.7"
+  },
+  "displayName": "Blast Radius — Error Trace & Impact Graph",
+  "publisher": "your-publisher-id",
+  "engines": {
+    "vscode": "^1.101.0"
+  },
+  "categories": [
+    "Debuggers",
+    "Visualization",
+    "AI"
+  ],
+  "bin": {
+    "blast-radius": "./dist/cli.js",
+    "blast-radius-mcp": "./dist/mcp.js"
+  },
+  "activationEvents": [
+    "workspaceContains:**/*.{ts,tsx,js,jsx,py}",
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "blastRadius.traceError",
+        "title": "Trace Error: Find Root-Cause Suspects",
+        "category": "Blast Radius",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "blastRadius.blastRadius",
+        "title": "Show Blast Radius of Function at Cursor",
+        "category": "Blast Radius",
+        "icon": "$(references)"
+      },
+      {
+        "command": "blastRadius.showPanel",
+        "title": "Open Panel",
+        "category": "Blast Radius"
+      },
+      {
+        "command": "blastRadius.reindex",
+        "title": "Re-index Workspace",
+        "category": "Blast Radius"
+      },
+      {
+        "command": "blastRadius.setupMcp",
+        "title": "Register MCP Server for Claude Code / Cursor",
+        "category": "Blast Radius"
+      },
+      {
+        "command": "blastRadius.showLog",
+        "title": "Show Log",
+        "category": "Blast Radius"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "blastRadius.blastRadius",
+          "group": "navigation@9",
+          "when": "editorLangId =~ /typescript|javascript|python/"
+        },
+        {
+          "command": "blastRadius.traceError",
+          "group": "navigation@10",
+          "when": "editorHasSelection"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "blastRadius.traceError",
+          "group": "navigation"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "blastRadius.traceError",
+        "key": "ctrl+alt+t",
+        "mac": "cmd+alt+t"
+      },
+      {
+        "command": "blastRadius.blastRadius",
+        "key": "ctrl+alt+b",
+        "mac": "cmd+alt+b",
+        "when": "editorTextFocus"
+      }
+    ],
+    "configuration": {
+      "title": "Blast Radius",
+      "properties": {
+        "blastRadius.autoTraceTerminal": {
+          "type": "boolean",
+          "default": true,
+          "description": "When a terminal command fails with a stack trace, rank root-cause suspects automatically."
+        },
+        "blastRadius.codeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show caller counts and recent-change markers above functions."
+        },
+        "blastRadius.maxSuspects": {
+          "type": "number",
+          "default": 10,
+          "description": "Suspects to show per trace."
+        },
+        "blastRadius.gitHistoryDays": {
+          "type": "number",
+          "default": 30,
+          "description": "How far back to read git history."
+        },
+        "blastRadius.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Python executable for indexing .py files (default: python3 / python)."
+        }
+      }
+    },
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "blastRadius.mcp",
+        "label": "Blast Radius code graph"
+      }
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YOUR_USER/blast-radius"
+  },
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1e1e1e",
+    "theme": "dark"
+  }
+}
