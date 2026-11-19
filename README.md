@@ -67,27 +67,44 @@ The uncommitted edit in `inventory.ts` is *more recent*, but it is **not ranked*
 
 Relate allows **one writer per `.rl` file**, and the extension holds it. The MCP server therefore forwards calls to a token-protected `127.0.0.1` endpoint inside the extension, so agents query the *live* graph, including a file saved a second ago. If VS Code isn't running, the MCP server opens (and if needed builds) the graph file itself, so it also works from a plain terminal with Claude Code.
 
-## Quick start (development)
+## Try it in 3 minutes (judges start here)
+
+**Needs:** VS Code ≥ 1.101, Node.js ≥ 22.6 (to run the TypeScript demo directly), git. Python 3 is optional (for indexing `.py` files). Works on macOS, Windows and Linux.
+
+**Option A: install the prebuilt extension (no build step)**
+
+1. Download the `.vsix` for your platform from [Releases](https://github.com/YOUR_USER/blast-radius/releases) (`darwin-arm64` = Apple Silicon, `darwin-x64`, `win32-x64`, `linux-x64`, `linux-arm64`).
+2. `code --install-extension blast-radius-<platform>.vsix`
+3. Create the demo project and open it:
+   ```bash
+   git clone https://github.com/YOUR_USER/blast-radius && cd blast-radius
+   node demo/setup-demo.mjs demo-shop
+   code demo-shop
+   ```
+
+**Option B: run from source**
 
 ```bash
 git clone https://github.com/YOUR_USER/blast-radius && cd blast-radius
-npm install
-npm run build
+npm install && npm run build
 npm run demo            # creates ./demo-shop with a bug hidden in git history
 code .                  # press F5 → "Extension Development Host", then File ▸ Open Folder ▸ demo-shop
 ```
 
-In the dev host's terminal:
+**Then, in demo-shop:**
 
-```bash
-node --experimental-strip-types src/index.ts NOPE     # crashes → notification → "Show suspects"
-```
+1. The status bar shows `⚡ 20 fns · 20 calls` once indexing finishes (under a second).
+2. In the integrated terminal, run `npm start -- NOPE`. It crashes with `TypeError … reading 'pct'`. A notification names **lookupCoupon** as the top suspect. Click **Show suspects**.
+3. Open `src/money.ts`. Click the CodeLens above `applyDiscount` to see its blast radius and the tests to run.
+4. Copilot agent mode lists the *Blast Radius* MCP tools automatically. For Claude Code or Cursor, run **Blast Radius: Register MCP Server**.
+
+No shell integration in your terminal? Copy the error output and run **Blast Radius: Trace Error** (Ctrl/Cmd+Alt+T), which reads the clipboard.
 
 CLI (same engine, no VS Code):
 
 ```bash
 node dist/cli.js index  demo-shop
-node dist/cli.js trace  demo-shop < trace.txt
+node dist/cli.js trace  demo-shop < demo-shop/trace.txt
 node dist/cli.js blast  demo-shop applyDiscount
 node dist/cli.js cycles demo-shop
 node dist/cli.js cypher demo-shop "MATCH (c:Commit)-[:TOUCHED]->(f) RETURN c.author, collect(f.name)"
@@ -103,10 +120,10 @@ claude mcp add blast-radius -- node /abs/path/blast-radius/dist/mcp.js --root /a
 
 ```bash
 npm run typecheck
-node test/e2e.cjs demo-shop trace.txt   # real dist/extension.js against a mocked VS Code API:
+node test/e2e.cjs demo-shop demo-shop/trace.txt # real dist/extension.js against a mocked VS Code API:
                                         # activation, terminal auto-trace, panel, CodeLens, incremental
                                         # re-index, git-commit refresh, MCP through the live bridge
-node test/mcp-e2e.mjs demo-shop trace.txt
+node test/mcp-e2e.mjs demo-shop demo-shop/trace.txt
 ```
 
 Measured here: zod (525 files / 3,030 functions / 3,255 call edges) fully indexes in 2.9 s. psf/requests (37 files / 711 functions) in 0.5 s. Graph queries take 1–30 ms.
@@ -126,6 +143,30 @@ code --install-extension dist-vsix/blast-radius-darwin-arm64.vsix
 * Line mapping for older commits drifts as later edits shift lines. Recency weighting keeps that harmless in practice.
 * No source-map support yet: `dist/x.js` frames fall back to `src/x.ts` by name. ts-node, tsx, vitest, jest and Node type-stripping already print TS positions.
 * Single-root workspaces (first folder).
+
+## Built with: Relate capabilities, third-party tools and AI use
+
+**Relate capabilities used**
+- **Embedded Node.js engine** (`@relate/relate`): runs in the VS Code extension host, with no server.
+- **Single-file persistence** (`.vscode/codegraph.rl`) and `checkpoint()` after every update.
+- **Cypher:** `UNWIND`/`MERGE` batch upserts, variable-length paths (`[:CALLS*1..5]`, `[:IMPORTS*2..6]` for cycles), aggregation, list comprehensions, `CALL {}` subqueries, and indexes.
+- **Transactions:** `begin`/`commit` for atomic re-indexing. `begin`/`rollback` plus statement-type checks make the agent's Cypher tool provably read-only.
+- **Agent access over MCP:** our own MCP server exposes graph-backed tools and raw read-only Cypher to Copilot, Claude Code and Cursor.
+
+**Third-party libraries:**
+- TypeScript compiler API 5.9 (parsing)
+- Python `ast` (stdlib)
+- `@modelcontextprotocol/sdk`
+- `zod`
+- `esbuild`
+- `@vscode/vsce`
+- `jsdom` (dev only)
+- git CLI
+
+All are open-source, used under their licenses. No pre-existing code of mine was reused. The project was started during the contest period (November 2026).
+
+**AI tools:** <!-- EDIT THIS to reflect what you actually did -->
+I used Claude (Anthropic) as a coding assistant to build this project. It wrote most of the initial implementation from my design brief: the indexers, the Relate graph layer, scoring, the webview, the MCP server and the test harness. I chose the idea and the scope, reviewed the code, tested it, and [describe your own changes, debugging, design decisions and demo work here]. The demo video is my own recording.
 
 ## Roadmap
 
