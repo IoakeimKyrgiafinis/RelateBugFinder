@@ -69,7 +69,7 @@ export interface StackFrame {
 }
 
 export interface SuspectReason {
-  kind: "value-origin" | "uncommitted" | "commit" | "file-commit" | "in-stack" | "caller" | "callee";
+  kind: "value-origin" | "field" | "uncommitted" | "commit" | "file-commit" | "in-stack" | "caller" | "callee";
   text: string;
 }
 

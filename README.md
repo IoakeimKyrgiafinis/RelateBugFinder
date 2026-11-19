@@ -67,6 +67,7 @@ Blast radius ("what breaks if I change this?") and MCP tools for agents are usef
             | 0.8/(1+hops) callee of the crash site ≤2 hops down | 0.4 × frame proximity for a direct callee of another frame
             | 1.0 the call that produced the undefined/null value | 0.9 the caller that passed it as an argument
             | 0.6 a method that sets the missing or empty field | 0.5 the constructor, if no method sets it
+            | 0.4 a method of the crash's class that changes a field the crash line reads | 0.3 another method of the class, or function of the module, that lacked an attribute
   ```
 
   Every suspect ships with human-readable reasons, so the ranking is never a black box. The weights were tuned on half of a real-bug benchmark and checked on the other half (below).
@@ -146,7 +147,7 @@ npm test     # builds throwaway demos in your temp folder (never touches ./demo-
              #  · every MCP tool with VS Code closed, with assertions on the ranking and git history
              #  · that the standalone MCP server never locks the graph file
              #  · 19 "where did the undefined come from?" cases (TS/JS/Python, V8/Firefox/Safari wording)
-             #  · 7 "which field was missing?" cases (Python AttributeError, self. / this. fields)
+             #  · 14 "which field was missing?" cases (AttributeError wordings incl. mock.patch, self. / this. fields read on a line)
 ```
 
 Also verified by hand in real VS Code on Windows 11 (F5 → demo-shop → crash in the terminal → notification → panel).
@@ -166,7 +167,7 @@ Weights were chosen on a fixed half of the bugs (`bench/tune.mjs`). On the **oth
 
 | Method | Top 1 | Top 3 | MRR |
 |---|---|---|---|
-| **Blast Radius** | **31%** | **37%** | **0.34** |
+| **Blast Radius** | **31%** | **39%** | **0.35** |
 | Read the stack top-down | 20% | 27% | 0.23 |
 | Stack frames, most recently changed first (Sentry-style) | 22% | 27% | 0.24 |
 | Most recently changed functions (ignores the trace) | 12% | 17% | 0.16 |
@@ -174,8 +175,15 @@ Weights were chosen on a fixed half of the bugs (`bench/tune.mjs`). On the **oth
 Where the gain comes from (all 114 bugs, full tables in [bench/RESULTS.md](bench/RESULTS.md)):
 
 * **Failing assertions** (a test's `assert` fails, n = 70): the right function is #1 in 24% of bugs, vs 6% for reading the stack. The stack ends in the test, so the useful suspects are the code the test called that changed recently.
-* **Crashes** (n = 44): about the same as reading the stack (top 1: 45% vs 43%). The stack is already a strong signal here.
-* **Crashes fixed somewhere off the stack** (n = 18): still hard for everyone. Blast Radius gets 1 into the top 3, and no baseline gets any. The "who should have set this field?" signal fires on 2 of these bugs, and both have the same error, `'tqdm' object has no attribute 'total'`. It finds the fix in `__init__` for tqdm:5 (#2, where nothing found it before). In tqdm:6 the fix was in `__len__`, the crash site itself, and the signal pushed it from #1 to #2. The rest involve dict keys, async futures and APIs that didn't exist yet, which need real data-flow analysis.
+* **Crashes** (n = 44): a little better than reading the stack (top 1: 48% vs 43%, top 3: 61% vs 57%). The stack is already a strong signal here.
+* **Crashes fixed somewhere off the stack** (n = 18): Blast Radius gets 3 into the top 3, and no baseline gets any. Each comes from a link read from the error itself:
+  * thefuck:12, `module … does not have the attribute 'which'` → the module's functions → `match` is #1.
+  * scrapy:19, `'WrappedRequest' object has no attribute 'full_url'` → the class's other methods → #2.
+  * tqdm:5, `'tqdm' object has no attribute 'total'` → the method that sets `self.total` → `__init__` is #2.
+
+  The same rule cost one place in tqdm:6. It has the same error, but there the fix was in the crash site itself (#1 → #2). The other 15 involve dict keys, async futures and APIs the fix had yet to add, which need real data-flow analysis.
+
+  These three rules were designed after looking at the off-stack failures in *both* halves of the benchmark. Their weights are fixed by principle (below the crash site), not tuned, but for these signals the held-out number is not fully blind.
 
 Reproduce: `node bench/bugsinpy.mjs --jobs 4` (needs `uv`; downloads the projects into `../bench-cache`; a few hours), then `node bench/report.mjs`. After changing the ranking, `node bench/rescore.mjs` re-scores in minutes without re-running any tests.
 

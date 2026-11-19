@@ -22,5 +22,14 @@ check("undefined read from this.field (nested class name)", missingField("TypeEr
 check("field of another object is not resolved", missingField("TypeError: x", field("req.body", "req.body", "undefined"), "Cart.total"), undefined);
 check("free function has no class", missingField("TypeError: x", field("this.config", "this.config", "undefined"), "total"), undefined);
 
+const { fieldsReadOnLine, missingModuleAttr } = require(out);
+check("fields read on a crash line (method calls excluded)", fieldsReadOnLine("        self.bracket_match.pop((self.depth, leaf.type))"), ["bracket_match", "depth"]);
+check("this.fields in TS, call skipped", fieldsReadOnLine("return this.rates[this.region] * this.compute(x)"), ["rates", "region"]);
+check("no self on the line", fieldsReadOnLine("return total(x)"), []);
+check("module attribute, Python 3 wording", missingModuleAttr("AttributeError: module 'thefuck.rules.no_command' has no attribute 'get_x'"), { module: "thefuck.rules.no_command", attr: "get_x" });
+check("module attribute, repr wording", missingModuleAttr("AttributeError: <module 'a.b' from 'C:\\\\x\\\\a\\\\b.py'> has no attribute 'f'"), { module: "a.b", attr: "f" });
+check("module attribute, mock.patch wording", missingModuleAttr("AttributeError: <module 'thefuck.rules.no_command' from 'C:\\\\w\\\\no_command.py'> does not have the attribute 'which'"), { module: "thefuck.rules.no_command", attr: "which" });
+check("object attribute is not a module", missingModuleAttr("AttributeError: 'tqdm' object has no attribute 'total'"), undefined);
+
 fs.rmSync(out, { force: true });
 console.log(`MISSING-FIELD CHECKS PASSED (${n})`);

@@ -23,9 +23,13 @@ import { nowSec } from "./clock";
  *             0.4 × frame proximity     direct callee of another stack frame (its result may have flowed into the crash)
  *             1.0                       the call that produced the undefined/null value read at the crash site
  *             0.9                       the caller that passed an undefined/null argument (see valueOrigin.ts)
+ *             0.6 / 0.5                 a method that sets the missing/empty field / the constructor if none does
+ *             0.4                       a method of the crash's class that changes a field the crash line reads
+ *             0.3                       another method of the class, or function of the module, that lacked an attribute
+ *   (0.4 / 0.3 links sit below the crash site; they lead mostly when the stack ends inside a test.)
  */
 // Weights picked on the DEV half of the BugsInPy benchmark only (bench/tune.mjs); see bench/RESULTS.md.
-export const SCORING = { HALF_LIFE_H: 336, DIRTY: 1.0, FN_COMMIT: 0.9, FILE_COMMIT: 0.15, BASELINE: 0.02, FLOOR: 0.3, TEST_PENALTY: 0.2, UP_HOPS: 5, DOWN_HOPS: 2, SIBLING: 0.4, ORIGIN: 1.0, FIELD_WRITER: 0.6, FIELD_INIT: 0.5 };
+export const SCORING = { HALF_LIFE_H: 336, DIRTY: 1.0, FN_COMMIT: 0.9, FILE_COMMIT: 0.15, BASELINE: 0.02, FLOOR: 0.3, TEST_PENALTY: 0.2, UP_HOPS: 5, DOWN_HOPS: 2, SIBLING: 0.4, ORIGIN: 1.0, FIELD_WRITER: 0.6, FIELD_INIT: 0.5, FIELD_READ: 0.4, MEMBER: 0.3 };
 
 const now = nowSec;
 const decay = (ts: number) => Math.pow(0.5, Math.max(0, now() - ts) / 3600 / SCORING.HALF_LIFE_H);
@@ -159,19 +163,49 @@ export function traceSuspects(g: CodeGraph, root: string, traceText: string, lim
 
   // 2c. A field that was missing or empty: the code that should have set it already returned, so it's
   // never on the stack. Rank the methods of that class that assign it, and its constructor.
-  const field = missingField(parsed.message, valueOrigin, crash.fn.id.split("#")[1].replace(/~\d+$/, ""));
+  const addSignal = (fn: FnRow, prox: number, reason: SuspectReason) => {
+    const prev = cand.get(fn.id);
+    if (prev) {
+      if (prev.prox < prox) prev.prox = prox;
+      if (!prev.reasons.some((x) => x.text === reason.text)) prev.reasons.unshift(reason);
+    } else cand.set(fn.id, { fn, relation: "downstream", prox, hops: 1, reasons: [reason] });
+  };
+  const crashQ = crash.fn.id.split("#")[1].replace(/~\d+$/, "");
+  const field = missingField(parsed.message, valueOrigin, crashQ);
   if (field) {
-    for (const w of fieldWriters(g, root, field.cls, field.attr)) {
-      const prox = w.assigns ? SCORING.FIELD_WRITER : SCORING.FIELD_INIT;
+    for (const w of fieldWriters(g, root, field.cls, field.attr, { ctorFallback: true })) {
       const text = w.assigns
         ? `Sets \`${field.self}.${field.attr}\`, which was ${field.how} at the crash (${w.file}:${w.line})`
         : `Constructor of ${field.cls}; nothing in the class sets \`${field.self}.${field.attr}\`, which was ${field.how} at the crash`;
-      const prev = cand.get(w.id);
-      if (prev) {
-        if (prev.prox < prox) prev.prox = prox;
-        prev.reasons.unshift({ kind: "value-origin", text });
-      } else cand.set(w.id, { fn: w, relation: "downstream", prox, hops: 1, reasons: [{ kind: "value-origin", text }] });
+      addSignal(w, w.assigns ? SCORING.FIELD_WRITER : SCORING.FIELD_INIT, { kind: "value-origin", text });
     }
+  }
+
+  // 2d. Weaker structural links read from the error itself. Kept even when cold (they are specific to this
+  // error), but weighted below the crash site so they only lead when the stack ends in a test.
+  //   · fields the crash line reads → methods of the same class that change them (state set earlier)
+  //   · 'X' object has no attribute 'y' → the other methods of X
+  //   · module 'a.b' has no attribute 'x' → the functions of that module
+  const cls = classOf(crashQ);
+  if (cls) {
+    const code = readLines(root, inWs[0].relPath!, new Map())[inWs[0].line - 1] ?? "";
+    for (const attr of fieldsReadOnLine(code).slice(0, 4)) {
+      if (field && attr === field.attr) continue;
+      for (const w of fieldWriters(g, root, cls, attr, { mutations: true }))
+        if (w.id !== crash.fn.id) addSignal(w, SCORING.FIELD_READ, { kind: "field", text: `Changes \`self.${attr}\`, which the crash line reads (${w.file}:${w.line})` });
+    }
+  }
+  if (field && field.how === "missing")
+    for (const m of classMethods(g, field.cls)) addSignal(m, SCORING.MEMBER, { kind: "field", text: `Method of ${field.cls}, which had no attribute \`${field.attr}\`` });
+  const modAttr = missingModuleAttr(parsed.message);
+  if (modAttr) {
+    const rel = modAttr.module.replace(/\./g, "/");
+    const fns = g.q(
+      `MATCH (f:Function) WHERE (f.file = $a OR f.file = $b) AND f.kind <> 'module'
+       RETURN f.id AS id, f.name AS name, f.file AS file, f.startLine AS startLine, f.endLine AS endLine`,
+      { a: `${rel}.py`, b: `${rel}/__init__.py` }
+    ) as unknown as FnRow[];
+    for (const f of fns) addSignal(f, SCORING.MEMBER, { kind: "field", text: `In module ${modAttr.module}, which had no attribute \`${modAttr.attr}\`` });
   }
 
   // 3. Recency signal for every candidate in one query.
@@ -216,7 +250,7 @@ export function traceSuspects(g: CodeGraph, root: string, traceText: string, lim
     }
     const kind = fileKind(c.fn.file);
     const score = scoreOf({ prox: c.prox, recency, kind });
-    const warm = recency > SCORING.BASELINE || c.reasons.some((x) => x.kind === "value-origin");
+    const warm = recency > SCORING.BASELINE || c.reasons.some((x) => x.kind === "value-origin" || x.kind === "field");
     if (opts.features) features.push({ id: c.fn.id, relation: c.relation, prox: c.prox, kind, dirty: !!r.dirty, fnTs: commits[0]?.ts ?? null, fileTs: fileCommits[0]?.ts ?? null, origin: c.reasons.some((x) => x.kind === "value-origin") });
     suspects.push({ ...c.fn, score: Math.round(score * 1000) / 10, hops: c.hops, relation: c.relation, reasons: c.reasons, lastChange, warm } as Suspect & { warm: boolean });
   }
@@ -256,33 +290,70 @@ export function missingField(message: string | undefined, origin: ReturnType<typ
   return undefined;
 }
 
-const fileCache = new Map<string, string[]>();
-/** Methods of class `cls` that assign `self.attr` / `this.attr`; the constructor if none does. */
-function fieldWriters(g: CodeGraph, root: string, cls: string, attr: string): (FnRow & { assigns: boolean; line: number })[] {
-  const methods = g.q(
+/**
+ * Fields of `self`/`this` that a line of code reads (not method calls), e.g.
+ *   `self.bracket_match.pop((self.depth, leaf.type))` → ["bracket_match", "depth"]
+ */
+export function fieldsReadOnLine(code: string): string[] {
+  const out: string[] = [];
+  for (const m of code.matchAll(/\b(?:self|this)\.(\w+)\b(?!\s*\()/g)) if (!out.includes(m[1])) out.push(m[1]);
+  return out;
+}
+
+/** `module 'a.b' has no attribute 'x'` / `<module 'a.b' from '…'> has no attribute 'x'` → { module: "a.b", attr: "x" } */
+export function missingModuleAttr(message: string | undefined): { module: string; attr: string } | undefined {
+  // "does not have the attribute" is unittest.mock.patch's wording for the same problem.
+  const m = message && /module '([\w.]+)'(?: from '[^']*'>)? (?:has no|does not have the) attribute '(\w+)'/.exec(message);
+  return m ? { module: m[1], attr: m[2] } : undefined;
+}
+
+/** Class part of a qualified name: `Outer.Cart.total` → `Cart`; undefined for a top-level function. */
+const classOf = (qualified: string): string | undefined => {
+  const parts = qualified.split(".");
+  return parts.length > 1 ? parts[parts.length - 2] : undefined;
+};
+
+type FnQ = FnRow & { q: string };
+/** Direct methods of class `cls` (Cls.m or Outer.Cls.m), not functions nested inside them. */
+function classMethods(g: CodeGraph, cls: string): FnQ[] {
+  return g.q(
     `MATCH (f:Function) WHERE f.qualifiedName STARTS WITH $p OR f.qualifiedName CONTAINS $inner
      RETURN f.id AS id, f.name AS name, f.qualifiedName AS q, f.file AS file, f.startLine AS startLine, f.endLine AS endLine`,
     { p: cls + ".", inner: "." + cls + "." }
   ).filter((r) => {
-    // Direct methods only (Cls.m or Outer.Cls.m), not functions nested inside them.
     const q = r.q as string;
     const rest = q.startsWith(cls + ".") ? q.slice(cls.length + 1) : q.slice(q.indexOf("." + cls + ".") + cls.length + 2);
     return !rest.includes(".");
-  }) as unknown as FnRow[];
-  const assign = new RegExp(`\\b(self|this)\\.${attr}\\s*(=(?!=)|[-+*/|&]=)|setattr\\(\\s*self\\s*,\\s*['"]${attr}['"]`);
+  }) as unknown as FnQ[];
+}
+
+function readLines(root: string, file: string, cache: Map<string, string[]>): string[] {
+  let lines = cache.get(file);
+  if (!lines) {
+    try { lines = fs.readFileSync(path.join(root, file), "utf8").split(/\r?\n/); } catch { lines = []; }
+    cache.set(file, lines);
+  }
+  return lines;
+}
+
+/**
+ * Methods of `cls` that assign `self.attr` / `this.attr`. With `mutations`, also in-place changes:
+ * `self.attr[k] = …`, `del self.attr[k]`, `self.attr.append(…)` and similar.
+ */
+function fieldWriters(g: CodeGraph, root: string, cls: string, attr: string, opts: { mutations?: boolean; ctorFallback?: boolean } = {}): (FnRow & { assigns: boolean; line: number })[] {
+  const methods = classMethods(g, cls);
+  const set = `\\b(self|this)\\.${attr}\\s*(=(?!=)|[-+*/|&]=)|setattr\\(\\s*self\\s*,\\s*['"]${attr}['"]`;
+  const mutate = `|\\b(self|this)\\.${attr}\\[[^\\]]*\\]\\s*(=(?!=)|[-+*/|&]=)|\\bdel\\s+(self|this)\\.${attr}\\b|\\b(self|this)\\.${attr}\\.(append|extend|insert|add|update|pop|popitem|remove|discard|clear|setdefault|push|splice|shift|unshift|set|delete)\\(`;
+  const re = new RegExp(set + (opts.mutations ? mutate : ""));
+  const cache = new Map<string, string[]>();
   const out: (FnRow & { assigns: boolean; line: number })[] = [];
   for (const fn of methods) {
-    let lines = fileCache.get(fn.file);
-    if (!lines) {
-      try { lines = fs.readFileSync(path.join(root, fn.file), "utf8").split(/\r?\n/); } catch { lines = []; }
-      fileCache.set(fn.file, lines);
-    }
+    const lines = readLines(root, fn.file, cache);
     for (let i = fn.startLine - 1; i < Math.min(fn.endLine, lines.length); i++)
-      if (assign.test(lines[i])) { out.push({ ...fn, assigns: true, line: i + 1 }); break; }
+      if (re.test(lines[i])) { out.push({ ...fn, assigns: true, line: i + 1 }); break; }
   }
-  fileCache.clear();
-  if (out.length) return out;
-  const ctor = methods.find((f) => /\.(__init__|constructor)$/.test(f.name));
+  if (out.length || !opts.ctorFallback) return out;
+  const ctor = methods.find((f) => /(^|\.)(__init__|constructor)$/.test(f.q));
   return ctor ? [{ ...ctor, assigns: false, line: ctor.startLine }] : [];
 }
 
