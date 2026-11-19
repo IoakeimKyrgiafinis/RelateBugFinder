@@ -2,6 +2,7 @@ import { CodeGraph, Row, TEST_FILE_RE } from "./graph";
 import { mapToWorkspace, parseStackTrace } from "./stackTrace";
 import { BlastNode, BlastResult, Suspect, SuspectReason, TraceResult } from "./types";
 import { findValueOrigin, parseNullishError } from "./valueOrigin";
+import { nowSec } from "./clock";
 
 /**
  * Suspect score = recency × proximity, both in [0,1]. Deliberately simple and explainable:
@@ -20,7 +21,7 @@ import { findValueOrigin, parseNullishError } from "./valueOrigin";
  */
 export const SCORING = { HALF_LIFE_H: 72, DIRTY: 1.0, FN_COMMIT: 0.9, FILE_COMMIT: 0.35, BASELINE: 0.02, UP_HOPS: 5, DOWN_HOPS: 2, SIBLING: 0.4, ORIGIN: 1.0 };
 
-const now = () => Date.now() / 1000;
+const now = nowSec;
 const decay = (ts: number) => Math.pow(0.5, Math.max(0, now() - ts) / 3600 / SCORING.HALF_LIFE_H);
 
 export function ago(ts: number): string {

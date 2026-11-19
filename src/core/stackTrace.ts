@@ -11,10 +11,13 @@ export interface ParsedTrace {
 const V8 = /^\s*at\s+(?:async\s+)?(?:(new\s+)?([^\s(][^(]*?)\s+\()?(.+?):(\d+):(\d+)\)?\s*$/;
 const FIREFOX = /^\s*([^@\s]*)@(.+?):(\d+):(\d+)\s*$/;
 const PY = /^\s*File "(.+?)", line (\d+)(?:, in (.+))?\s*$/;
-const PYTEST = /^([^\s:][^:]*\.py):(\d+): in (\S+)/;
+// pytest: `--tb=short` prints `path.py:12: in fn`; the default long format prints `path.py:12: ` between
+// frames and `path.py:12: AttributeError` for the last one.
+const PYTEST = /^((?:[A-Za-z]:)?[^\s:][^:]*\.py):(\d+):(?: in (\S+)| ([A-Z]\w*(?:Error|Exception|Exit|Interrupt|Warning)\w*))?\s*$/;
 const TSC = /^([^\s(][^(]*\.[cm]?[jt]sx?)(?:\((\d+),(\d+)\)|:(\d+):(\d+))\s*[-:]\s*error/;
 const GENERIC = /((?:[A-Za-z]:)?[\w./\\@-]+\.(?:[cm]?[jt]sx?|py)):(\d+)(?::(\d+))?/;
-const ERRMSG = /^\s*(?:Uncaught\s+)?((?:[A-Z]\w*)?(?:Error|Exception|Exit)\b.*?)\s*$/;
+// `E   AttributeError: …` is pytest's error line.
+const ERRMSG = /^\s*(?:E\s{2,})?(?:Uncaught\s+)?((?:[A-Z]\w*)?(?:Error|Exception|Exit)\b.*?)\s*$/;
 
 /** Strip URL/bundler prefixes so the remaining path can be matched against the workspace. */
 export function cleanPath(p: string): string {
@@ -45,6 +48,7 @@ export function parseStackTrace(text: string): ParsedTrace {
       if (/site-packages|dist-packages|<frozen|lib\/python\d|[\\/]Python\d*[\\/]Lib[\\/]/.test(m[1])) continue;
       py.push({ raw: raw.trim(), fn: m[3]?.trim(), file: cleanPath(m[1]), line: +m[2] });
     } else if ((m = PYTEST.exec(raw))) {
+      if (/site-packages|dist-packages|lib\/python\d|[\\/]Python\d*[\\/]Lib[\\/]/.test(m[1])) continue;
       py.push({ raw: raw.trim(), fn: m[3], file: cleanPath(m[1]), line: +m[2] });
     } else if ((m = FIREFOX.exec(raw)) && /\.[cm]?[jt]sx?/.test(m[2])) {
       js.push({ raw: raw.trim(), fn: m[1] || undefined, file: cleanPath(m[2]), line: +m[3], col: +m[4] });

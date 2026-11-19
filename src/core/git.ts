@@ -1,6 +1,7 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { CommitInfo, DirtyInfo } from "./types";
+import { isPinned, nowSec } from "./clock";
 
 const run = promisify(execFile);
 
@@ -59,8 +60,9 @@ export async function recentCommits(root: string, sinceDays = 30, max = 400): Pr
   const RS = "\x1e", US = "\x1f";
   let out: string;
   try {
+    const until = nowSec();
     out = await git(root, [
-      "log", `--since=${sinceDays}.days`, `--max-count=${max}`, "--no-color", "--no-renames", "--relative",
+      "log", `--since=@${Math.floor(until - sinceDays * 86400)}`, ...(isPinned() ? [`--until=@${Math.floor(until)}`] : []), `--max-count=${max}`, "--no-color", "--no-renames", "--relative",
       "-U0", "-p", `--format=${RS}%H${US}%an${US}%at${US}%s`,
     ]);
   } catch {

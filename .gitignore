@@ -9,3 +9,5 @@ demo-shop
 test/state-*.json
 test/panel.html
 test/.value-origin-*.cjs
+bench/.dist
+test/.stack-trace-*.cjs
