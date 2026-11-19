@@ -5,7 +5,7 @@
  *   node dist/mcp.js --root /path/to/workspace
  *
  * Fast path: forwards each tool call to the running VS Code extension, which owns the live graph.
- * Fallback (VS Code closed): opens `.vscode/codegraph.rl` itself and re-indexes the workspace first.
+ * Fallback (VS Code closed): indexes the workspace into an in-memory graph (never locks the .rl file).
  */
 import * as fs from "fs";
 import * as path from "path";
@@ -54,31 +54,39 @@ function viaBridge(name: string, args: unknown): Promise<unknown> {
   });
 }
 
-let local: CodeGraph | undefined;
+/**
+ * Fallback graph, built IN MEMORY. Relate only releases a file's writer lock when the process exits, and
+ * this server lives as long as the agent session — opening `.vscode/codegraph.rl` here would stop the
+ * VS Code extension from starting later. Indexing takes ~1–3 s, so rebuilding when stale is cheap.
+ */
+const STALE_MS = 15_000;
+let local: { graph: CodeGraph; ws: Workspace; at: number } | undefined;
+let indexing: Promise<void> | undefined;
+
 async function viaLocal(name: string, args: Record<string, unknown>): Promise<unknown> {
   if (!local) {
-    const file = path.join(ROOT, ".vscode", "codegraph.rl");
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    local = CodeGraph.open(file);
-    const ws = new Workspace(ROOT, local, { pythonScript: path.join(__dirname, "..", "python", "py_index.py"), log });
-    // Always re-index: code may have changed while VS Code was closed, and the git layer can only be
-    // linked to functions the Workspace has parsed (a bare refreshGit on an empty Workspace would wipe it).
-    log(`indexing ${ROOT} …`);
-    const s = await ws.fullIndex();
-    log(`indexed ${s.files} files, ${s.functions} functions, ${s.calls} calls in ${s.ms}ms`);
+    const graph = CodeGraph.open(":memory:");
+    local = { graph, ws: new Workspace(ROOT, graph, { pythonScript: path.join(__dirname, "..", "python", "py_index.py"), log }), at: 0 };
   }
-  return callTool(local, ROOT, name, args);
+  if (Date.now() - local.at > STALE_MS) {
+    indexing ??= (async () => {
+      const s = await local!.ws.fullIndex();
+      local!.at = Date.now();
+      log(`indexed ${s.files} files, ${s.functions} functions, ${s.calls} calls in ${s.ms}ms (in memory)`);
+    })().finally(() => (indexing = undefined));
+    await indexing;
+  }
+  return callTool(local.graph, ROOT, name, args);
 }
 
 async function dispatch(name: string, args: Record<string, unknown>): Promise<unknown> {
-  if (!local) {
-    try {
-      return await viaBridge(name, args);
-    } catch (e) {
-      const code = (e as NodeJS.ErrnoException).code;
-      if (code !== "NOBRIDGE" && code !== "ECONNREFUSED" && code !== "ECONNRESET") throw e;
-      log("VS Code extension not reachable → using the graph file directly");
-    }
+  // Always prefer the live graph: VS Code may have been opened since the last call.
+  try {
+    return await viaBridge(name, args);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code !== "NOBRIDGE" && code !== "ECONNREFUSED" && code !== "ECONNRESET") throw e;
+    if (!local) log("VS Code extension not reachable → indexing the workspace in memory");
   }
   return viaLocal(name, args);
 }
@@ -88,7 +96,7 @@ async function main() {
   for (const t of TOOLS) {
     const shape: Record<string, z.ZodTypeAny> = {};
     for (const [k, p] of Object.entries(t.params)) {
-      let s: z.ZodTypeAny = p.type === "number" ? z.number() : p.type === "object" ? z.record(z.string(), z.any()) : z.string();
+      let s: z.ZodTypeAny = p.type === "number" ? z.coerce.number() : p.type === "object" ? z.record(z.string(), z.any()) : z.string();
       s = s.describe(p.description);
       shape[k] = p.optional ? s.optional() : s;
     }

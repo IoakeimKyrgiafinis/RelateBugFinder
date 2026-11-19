@@ -60,10 +60,19 @@ export const TOOLS: ToolDef[] = [
   },
 ];
 
+/** Agents send strings, floats or nothing: clamp to a sane integer instead of producing NaN Cypher. */
+function int(v: unknown, def: number, min: number, max: number): number {
+  const n = Math.round(Number(v ?? def));
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : def;
+}
+
+/** Relate executes synchronously on the extension host thread, so an unbounded path query would freeze VS Code. */
+const UNBOUNDED = /\*\s*\]|\*\s*(?:\d+\s*)?\.\.\s*\]/; // [*]  [*..]  [*2..]  — but not [*3] or [*..5]
+
 export function callTool(g: CodeGraph, root: string, name: string, args: Record<string, unknown>): unknown {
   switch (name) {
     case "trace_error_suspects": {
-      const r = traceSuspects(g, root, String(args.stack_trace ?? ""), Number(args.limit ?? 10));
+      const r = traceSuspects(g, root, String(args.stack_trace ?? ""), int(args.limit, 10, 1, 50));
       return {
         error: r.note,
         crashSite: r.crashSite,
@@ -81,15 +90,19 @@ export function callTool(g: CodeGraph, root: string, name: string, args: Record<
       };
     }
     case "get_blast_radius":
-      return blastRadius(g, root, String(args.target ?? ""), Number(args.depth ?? 4)) ?? { error: `Nothing in the graph matches "${args.target}".` };
+      return blastRadius(g, root, String(args.target ?? ""), int(args.depth, 4, 1, 8)) ?? { error: `Nothing in the graph matches "${args.target}".` };
     case "find_recent_suspects":
-      return recentChanges(g, Number(args.hours ?? 48));
+      return recentChanges(g, int(args.hours, 48, 1, 24 * 365));
     case "find_circular_dependencies": {
-      const cycles = circularDependencies(g, Number(args.max_length ?? 6));
+      const cycles = circularDependencies(g, int(args.max_length, 6, 2, 10));
       return { count: cycles.length, cycles: cycles.map((c) => c.join(" -> ")) };
     }
-    case "query_codegraph":
-      return g.readOnly(String(args.cypher ?? ""), (args.params as Record<string, unknown>) ?? {});
+    case "query_codegraph": {
+      const cypher = String(args.cypher ?? "");
+      if (UNBOUNDED.test(cypher))
+        throw new Error("Variable-length patterns need an upper bound, e.g. [:CALLS*1..6] (unbounded paths can take minutes on a large graph).");
+      return g.readOnly(cypher, (args.params as Record<string, unknown>) ?? {});
+    }
     default:
       throw new Error(`Unknown tool ${name}`);
   }

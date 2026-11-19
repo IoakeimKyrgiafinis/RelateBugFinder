@@ -41,12 +41,28 @@ export async function activate(ctx: vscode.ExtensionContext) {
   const dbFile = path.join(root, ".vscode", "codegraph.rl");
   fs.mkdirSync(path.dirname(dbFile), { recursive: true });
   ensureGitignore(root);
-  try {
-    graph = CodeGraph.open(dbFile);
-  } catch (e) {
-    status.text = "$(error) Blast Radius";
-    void vscode.window.showErrorMessage((e as Error).message);
-    return;
+  // Relate allows one writer per file. Another window (or an older MCP server version) may hold it
+  // briefly while exiting, so retry for a while before giving up.
+  for (let attempt = 1; !graph; attempt++) {
+    try {
+      graph = CodeGraph.open(dbFile);
+    } catch (e) {
+      if (attempt >= 10) {
+        status.text = "$(error) Blast Radius: graph locked";
+        log(`open failed: ${(e as Error).message}`);
+        const pick = await vscode.window.showErrorMessage(
+          "Blast Radius can't open its graph file because another process holds it (another VS Code window on this folder, or a running blast-radius CLI/MCP process). Close it, then retry.",
+          "Retry"
+        );
+        if (pick === "Retry") {
+          status.dispose();
+          return activate(ctx);
+        }
+        return;
+      }
+      status.text = `$(sync~spin) Blast Radius: waiting for graph lock (${attempt})…`;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
   }
   ws = new Workspace(root, graph, {
     pythonPath: cfg().get<string>("pythonPath") || undefined,
@@ -248,6 +264,8 @@ function setupTerminal(ctx: vscode.ExtensionContext) {
       if (e.exitCode === 0 && !/Error|Traceback|Exception/.test(text)) return;
       const parsed = parseStackTrace(text);
       if (!parsed.frames.length) return;
+      // A successful command that merely logged "Error" + a file:line (linters, test logs) is not a crash.
+      if (e.exitCode === 0 && parsed.language === "unknown") return;
       const result = await serial(() => traceSuspects(graph!, root, text, cfg().get<number>("maxSuspects") ?? 10));
       const top = result.suspects[0];
       if (!top) return;

@@ -12,9 +12,10 @@ import { BlastNode, BlastResult, Suspect, SuspectReason, TraceResult } from "./t
  *   proximity 1.0                       crash site (top in-workspace frame)
  *             1 / (1 + 0.5·i)           i-th frame further down the stack
  *             1 / (1 + hops)            static caller N hops upstream (max 5)
- *             0.8 / (1 + hops)          callee N hops downstream (max 2) — a changed helper often *is* the bug
+ *             0.8 / (1 + hops)          callee N hops downstream of the crash site (max 2) — a changed helper often *is* the bug
+ *             0.4 × frame proximity     direct callee of another stack frame (its result may have flowed into the crash)
  */
-export const SCORING = { HALF_LIFE_H: 72, DIRTY: 1.0, FN_COMMIT: 0.9, FILE_COMMIT: 0.35, BASELINE: 0.02, UP_HOPS: 5, DOWN_HOPS: 2 };
+export const SCORING = { HALF_LIFE_H: 72, DIRTY: 1.0, FN_COMMIT: 0.9, FILE_COMMIT: 0.35, BASELINE: 0.02, UP_HOPS: 5, DOWN_HOPS: 2, SIBLING: 0.4 };
 
 const now = () => Date.now() / 1000;
 const decay = (ts: number) => Math.pow(0.5, Math.max(0, now() - ts) / 3600 / SCORING.HALF_LIFE_H);
@@ -94,6 +95,25 @@ export function traceSuspects(g: CodeGraph, root: string, traceText: string, lim
     if (cand.has(r.id as string)) continue;
     const hops = r.hops as number;
     cand.set(r.id as string, { fn: r as unknown as FnRow, relation: "downstream", prox: 0.8 / (1 + hops), hops, reasons: [{ kind: "callee", text: `Called by the crash site ${hops} hop${hops > 1 ? "s" : ""} down` }] });
+  }
+  // Helpers called directly by the other stack frames also ran before the crash, and their return value
+  // may be what reached the crash site (e.g. summary() calls getRate(), passes it to total()). 1 hop only,
+  // scaled by that frame's own proximity, so deeper unrelated work below a frame stays out.
+  const frames = [...cand.entries()].filter(([, c]) => c.relation === "in-stack").map(([id, c]) => ({ id, name: c.fn.name, prox: c.prox }));
+  if (frames.length) {
+    const siblings = g.q(
+      `UNWIND $frames AS fr
+       MATCH (c:Function {id:fr.id})-[:CALLS]->(d:Function)
+       WHERE NOT d.id IN $ids AND d.kind <> 'module'
+       RETURN d.id AS id, d.name AS name, d.file AS file, d.startLine AS startLine, d.endLine AS endLine, fr.name AS via, fr.prox AS fprox`,
+      { frames, ids: stackIds }
+    );
+    for (const r of siblings) {
+      const prox = SCORING.SIBLING * (r.fprox as number);
+      const prev = cand.get(r.id as string);
+      if (prev && prev.prox >= prox) continue;
+      cand.set(r.id as string, { fn: r as unknown as FnRow, relation: "downstream", prox, hops: 1, reasons: [{ kind: "callee", text: `Called directly by ${r.via}, which is on the stack` }] });
+    }
   }
 
   // 3. Recency signal for every candidate in one query.

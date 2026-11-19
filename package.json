@@ -10,7 +10,8 @@
     "package": "vsce package",
     "demo": "node demo/setup-demo.mjs demo-shop",
     "test:e2e": "node test/e2e.cjs demo-shop demo-shop/trace.txt",
-    "package:all": "node scripts/package-all.mjs"
+    "package:all": "node scripts/package-all.mjs",
+    "test": "node scripts/run-tests.mjs"
   },
   "keywords": [
     "stack trace",

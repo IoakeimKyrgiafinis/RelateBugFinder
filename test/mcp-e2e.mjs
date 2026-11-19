@@ -2,6 +2,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import fs from "fs";
+import assert from "assert";
 import { fileURLToPath } from "url";
 const [root, traceFile] = process.argv.slice(2);
 const transport = new StdioClientTransport({ command: "node", args: [fileURLToPath(new URL("../dist/mcp.js", import.meta.url)), "--root", root], stderr: "inherit" });
@@ -22,4 +23,14 @@ const q = await call("query_codegraph", { cypher: "MATCH (c:Commit)-[:TOUCHED]->
 console.log(`cypher (${q.ms}ms):`, JSON.stringify(q.data.rows));
 const w = await call("query_codegraph", { cypher: "MATCH (f:Function) DETACH DELETE f" });
 console.log("write attempt:", w.isError, w.data);
+
+// The graph must carry git history in every mode (a past bug wiped it in the standalone fallback).
+assert.equal(tools.length, 5);
+assert.equal(tr.data.suspects[0].id, "src/coupons.ts#lookupCoupon", "wrong top suspect");
+assert.match(br.data.summary, /applyDiscount/);
+assert.ok(cy.data.count >= 1, "expected the demo's import cycle");
+assert.ok(rc.data.some((r) => r.id === "src/coupons.ts#lookupCoupon"), "recent changes lost");
+assert.deepEqual(q.data.rows, [{ fn: "src/coupons.ts#lookupCoupon" }]);
+assert.ok(w.isError, "write query was not rejected");
+console.log("MCP E2E CHECKS PASSED");
 await client.close();

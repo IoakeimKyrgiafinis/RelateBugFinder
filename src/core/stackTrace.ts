@@ -41,7 +41,8 @@ export function parseStackTrace(text: string): ParsedTrace {
       if (file.startsWith("node:") || file.includes("node_modules") || file === "<anonymous>" || file.startsWith("internal/")) continue;
       js.push({ raw: raw.trim(), fn: normaliseFn(m[2]), file: cleanPath(file), line: +m[4], col: +m[5] });
     } else if ((m = PY.exec(raw))) {
-      if (/site-packages|dist-packages|<frozen|lib\/python\d/.test(m[1])) continue;
+      // Third-party and stdlib frames (posix lib/pythonX.Y, Windows <Python>\Lib\...).
+      if (/site-packages|dist-packages|<frozen|lib\/python\d|[\\/]Python\d*[\\/]Lib[\\/]/.test(m[1])) continue;
       py.push({ raw: raw.trim(), fn: m[3]?.trim(), file: cleanPath(m[1]), line: +m[2] });
     } else if ((m = PYTEST.exec(raw))) {
       py.push({ raw: raw.trim(), fn: m[3], file: cleanPath(m[1]), line: +m[2] });
