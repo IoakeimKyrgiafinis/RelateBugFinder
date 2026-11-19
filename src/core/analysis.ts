@@ -3,6 +3,7 @@ import { mapToWorkspace, parseStackTrace } from "./stackTrace";
 import { BlastNode, BlastResult, Suspect, SuspectReason, TraceResult } from "./types";
 import { findValueOrigin, parseNullishError } from "./valueOrigin";
 import { nowSec } from "./clock";
+import { executedIn } from "./deepTrace";
 
 /**
  * Suspect score = proximity × (0.3 + recency) / 1.3, × 0.2 for test code, shown as 0–100.
@@ -27,7 +28,7 @@ import { nowSec } from "./clock";
  *   (0.4 / 0.3 links sit below the crash site; they lead mostly when the stack ends inside a test.)
  */
 // Weights picked on the DEV half of the BugsInPy benchmark only (bench/tune.mjs); see bench/RESULTS.md.
-export const SCORING = { HALF_LIFE_H: 336, DIRTY: 1.0, FN_COMMIT: 0.9, FILE_COMMIT: 0.15, BASELINE: 0.02, FLOOR: 0.3, TEST_PENALTY: 0.2, UP_HOPS: 5, DOWN_HOPS: 2, SIBLING: 0.4, ORIGIN: 1.0, FIELD_WRITER: 0.6, FIELD_INIT: 0.5, FIELD_READ: 0.4, MEMBER: 0.3 };
+export const SCORING = { HALF_LIFE_H: 336, DIRTY: 1.0, FN_COMMIT: 0.9, FILE_COMMIT: 0.15, BASELINE: 0.02, FLOOR: 0.3, TEST_PENALTY: 0.2, UP_HOPS: 5, DOWN_HOPS: 2, SIBLING: 0.4, ORIGIN: 1.0, FIELD_WRITER: 0.6, FIELD_INIT: 0.5, FIELD_READ: 0.4, MEMBER: 0.3, RAN: 0.2, SINCE_K: 2, NOT_RAN: 1 };
 
 const now = nowSec;
 const decay = (ts: number) => Math.pow(0.5, Math.max(0, now() - ts) / 3600 / SCORING.HALF_LIFE_H);
@@ -58,9 +59,9 @@ export function functionAtLine(g: CodeGraph, file: string, line: number): FnRow 
 // ------------------------------------------------------------------ trace
 
 /** Raw per-candidate signals, so the benchmark can re-weight scores offline without re-indexing. */
-export interface CandidateFeatures { id: string; relation: Suspect["relation"]; prox: number; kind: FileKind; dirty: boolean; fnTs: number | null; fileTs: number | null; origin: boolean }
+export interface CandidateFeatures { id: string; relation: Suspect["relation"]; prox: number; kind: FileKind; dirty: boolean; fnTs: number | null; fileTs: number | null; origin: boolean; field: boolean; ran: boolean | null; since: number | null }
 
-export function traceSuspects(g: CodeGraph, root: string, traceText: string, limit = 12, opts: { features?: boolean } = {}): TraceResult & { features?: CandidateFeatures[] } {
+export function traceSuspects(g: CodeGraph, root: string, traceText: string, limit = 12, opts: { features?: boolean; run?: string } = {}): TraceResult & { features?: CandidateFeatures[] } {
   const features: CandidateFeatures[] = [];
   const parsed = parseStackTrace(traceText);
   const files = indexedFiles(g);
@@ -202,6 +203,25 @@ export function traceSuspects(g: CodeGraph, root: string, traceText: string, lim
     for (const f of fns) addSignal(f, SCORING.MEMBER, { kind: "field", text: `In module ${modAttr.module}, which had no attribute \`${modAttr.attr}\`` });
   }
 
+  // 2e. Deep trace: what actually ran in a recorded re-run of the failing command (deepTrace.ts).
+  // Functions that ran join the candidates, weighted by how close to the crash they last ran;
+  // (NOT_RAN can push down neighbours that never ran; the benchmark found no gain from it, so it is 1.)
+  const executed = opts.run ? executedIn(g, opts.run) : undefined;
+  if (executed) {
+    const fresh = [...executed.keys()].filter((id) => !cand.has(id));
+    for (let i = 0; i < fresh.length; i += 2000) {
+      const rows = g.q(
+        "MATCH (f:Function) WHERE f.id IN $ids AND f.kind <> 'module' RETURN f.id AS id, f.name AS name, f.file AS file, f.startLine AS startLine, f.endLine AS endLine",
+        { ids: fresh.slice(i, i + 2000) }
+      ) as unknown as FnRow[];
+      for (const fn of rows) cand.set(fn.id, { fn, relation: "ran", prox: 0, hops: 0, reasons: [] });
+    }
+    for (const [id, c] of cand) {
+      const e = executed.get(id);
+      if (e) c.reasons.push({ kind: "ran", text: `Ran in the deep trace (${e.count} call${e.count > 1 ? "s" : ""}${e.since <= 5 ? ", among the last to run before the crash" : ""})` });
+    }
+  }
+
   // 3. Recency signal for every candidate in one query.
   const ids = [...cand.keys()];
   const rec = g.q(
@@ -243,9 +263,10 @@ export function traceSuspects(g: CodeGraph, root: string, traceText: string, lim
       c.reasons.push({ kind: "file-commit", text: `File (not this function) changed ${ago(top.ts)} in ${top.hash.slice(0, 7)}` });
     }
     const kind = fileKind(c.fn.file);
-    const score = scoreOf({ prox: c.prox, recency, kind });
-    const warm = recency > SCORING.BASELINE || c.reasons.some((x) => x.kind === "value-origin" || x.kind === "field");
-    if (opts.features) features.push({ id: c.fn.id, relation: c.relation, prox: c.prox, kind, dirty: !!r.dirty, fnTs: commits[0]?.ts ?? null, fileTs: fileCommits[0]?.ts ?? null, origin: c.reasons.some((x) => x.kind === "value-origin") });
+    const ex = executed ? executed.get(c.fn.id) ?? null : undefined;
+    const score = scoreOf({ prox: effectiveProx(c.prox, c.relation, ex), recency, kind });
+    const warm = recency > SCORING.BASELINE || c.reasons.some((x) => x.kind === "value-origin" || x.kind === "field") || !!ex;
+    if (opts.features) features.push({ id: c.fn.id, relation: c.relation, prox: c.prox, kind, dirty: !!r.dirty, fnTs: commits[0]?.ts ?? null, fileTs: fileCommits[0]?.ts ?? null, origin: c.reasons.some((x) => x.kind === "value-origin"), field: c.reasons.some((x) => x.kind === "field"), ran: ex === undefined ? null : !!ex, since: ex ? ex.since : null });
     suspects.push({ ...c.fn, score: Math.round(score * 1000) / 10, hops: c.hops, relation: c.relation, reasons: c.reasons, lastChange, warm } as Suspect & { warm: boolean });
   }
 
@@ -328,6 +349,18 @@ function fieldWriters(g: CodeGraph, cls: string, attr: string, opts: { mutations
 /** Fields the crash function reads on the crash line, from its READS edges. */
 function fieldsReadAt(g: CodeGraph, fnId: string, line: number): { cls: string; name: string }[] {
   return g.q("MATCH (:Function {id:$id})-[r:READS]->(f:Field) WHERE r.line = $line RETURN DISTINCT f.cls AS cls, f.name AS name", { id: fnId, line }) as { cls: string; name: string }[];
+}
+
+/**
+ * Proximity after a deep trace. `ex`: undefined = no deep trace; null = did not run; else how it ran.
+ * Ran → at least RAN / (1 + since / SINCE_K), where `since` counts project calls after its last call.
+ * Did not run → × NOT_RAN, except stack frames (they obviously ran; a mapping miss shouldn't sink them).
+ */
+export function effectiveProx(prox: number, relation: Suspect["relation"], ex: { since: number } | null | undefined): number {
+  if (ex === undefined) return prox;
+  if (ex) return Math.max(prox, SCORING.RAN / (1 + ex.since / SCORING.SINCE_K));
+  if (relation === "crash-site" || relation === "in-stack") return prox;
+  return prox * SCORING.NOT_RAN;
 }
 
 export type FileKind = "src" | "test";

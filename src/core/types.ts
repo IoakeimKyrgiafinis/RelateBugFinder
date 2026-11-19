@@ -69,7 +69,7 @@ export interface StackFrame {
 }
 
 export interface SuspectReason {
-  kind: "value-origin" | "field" | "uncommitted" | "commit" | "file-commit" | "in-stack" | "caller" | "callee";
+  kind: "value-origin" | "field" | "ran" | "uncommitted" | "commit" | "file-commit" | "in-stack" | "caller" | "callee";
   text: string;
 }
 
@@ -81,7 +81,7 @@ export interface Suspect {
   endLine: number;
   score: number;
   hops: number;
-  relation: "crash-site" | "in-stack" | "upstream" | "downstream";
+  relation: "crash-site" | "in-stack" | "upstream" | "downstream" | "ran";
   reasons: SuspectReason[];
   lastChange?: { hash: string; author: string; ts: number; message: string };
 }

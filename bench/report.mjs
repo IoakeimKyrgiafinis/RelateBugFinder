@@ -12,6 +12,7 @@ const all = [...byBug.values()];
 
 const METHODS = [
   ["blast", "**Blast Radius**"],
+  ["blastDeep", "**Blast Radius + Deep trace** (one recorded re-run of the failing test)"],
   ["stack", "Read the stack top-down"],
   ["sentry", "Stack frames, most recently changed first (Sentry-style)"],
   ["recent", "Most recently changed functions (ignores the trace)"],
@@ -69,10 +70,10 @@ ${noTruth ? `${noTruth} reproduced bug(s) are excluded from scoring because the 
 `;
 for (const [title, set] of groups) md += `\n### ${title} (n = ${set.length})\n\n${set.length ? table(set) : "_none_"}\n`;
 
-md += `\n## Per bug\n\n| Bug | Kind | Fixed function | On stack | Changed ≤30d | Blast | Stack | Sentry | Recent |\n|---|---|---|---|---|---|---|---|---|\n`;
+md += `\n## Per bug\n\n| Bug | Kind | Fixed function | On stack | Changed ≤30d | Blast | +Deep | Stack | Sentry | Recent |\n|---|---|---|---|---|---|---|---|---|---|\n`;
 for (const r of scored.sort((a, b) => a.bug.localeCompare(b.bug, undefined, { numeric: true }))) {
   const f = (x) => (x === null || x === undefined ? "–" : `#${x}`);
-  md += `| ${r.bug} | ${isAssert(r) ? "assert" : (r.message ?? "").split(":")[0].slice(0, 22)} | \`${r.truth[0].split("#")[1]}\`${r.truth.length > 1 ? ` +${r.truth.length - 1}` : ""} | ${r.truthOnStack ? "yes" : "no"} | ${r.truthChangedInWindow ? "yes" : "no"} | ${f(r.ranks.blast)} | ${f(r.ranks.stack)} | ${f(r.ranks.sentry)} | ${f(r.ranks.recent)} |\n`;
+  md += `| ${r.bug} | ${isAssert(r) ? "assert" : (r.message ?? "").split(":")[0].slice(0, 22)} | \`${r.truth[0].split("#")[1]}\`${r.truth.length > 1 ? ` +${r.truth.length - 1}` : ""} | ${r.truthOnStack ? "yes" : "no"} | ${r.truthChangedInWindow ? "yes" : "no"} | ${f(r.ranks.blast)} | ${f(r.ranks.blastDeep)} | ${f(r.ranks.stack)} | ${f(r.ranks.sentry)} | ${f(r.ranks.recent)} |\n`;
 }
 fs.writeFileSync(path.join(here, "RESULTS.md"), md);
 console.log(md.split("## Per bug")[0]);
