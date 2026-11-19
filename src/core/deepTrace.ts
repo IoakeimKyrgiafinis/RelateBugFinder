@@ -23,16 +23,58 @@ import * as path from "path";
 import { fileURLToPath } from "url";
 import { CodeGraph } from "./graph";
 import { nowSec } from "./clock";
+import { PyEnv, shellRun, withPyEnv } from "./pyenv";
 
 /** A returned value (summary from the recorder), how often, and how many project returns came after its last one. */
 export interface RetValue { v: string; n: number; ago: number }
 export interface ExecRecord { file: string; line: number; name: string; count: number; since: number; lines?: number[]; rets?: RetValue[] }
-export interface DeepTraceResult { exitCode: number | null; output: string; records: ExecRecord[]; ms: number }
+/** What the Python recorder reported about itself (one per recorded process). */
+export interface RecorderInfo { python?: string; version?: string; mode?: string; lines?: string }
 
-/** Run `command` in a shell with the recorders switched on. Never throws for a failing command. */
-export function runDeepTrace(opts: { root: string; command: string; cwd?: string; recorderDir: string; timeoutMs?: number; env?: NodeJS.ProcessEnv }): Promise<DeepTraceResult> {
+export interface DeepTraceResult {
+  exitCode: number | null;
+  output: string;
+  records: ExecRecord[];
+  ms: number;
+  /** Stopped by the user (signal) or by the time limit: nothing is recorded then. */
+  stopped?: "cancelled" | "timeout";
+  /** The Python processes that were recorded: interpreter, version, recording mode, line recording state. */
+  recorders: RecorderInfo[];
+  /** The shell the command ran in, and the Python environment put first on PATH, for messages. */
+  shell: string;
+  pyEnv?: string;
+}
+
+export interface DeepTraceOptions {
+  root: string;
+  command: string;
+  cwd?: string;
+  recorderDir: string;
+  timeoutMs?: number;
+  env?: NodeJS.ProcessEnv;
+  /** The user's terminal shell (pwsh, bash, …); default: the platform shell. */
+  shellPath?: string;
+  /** The project's Python environment, put first on PATH. */
+  pyEnv?: PyEnv;
+  /** Abort → the whole process tree is stopped. */
+  signal?: AbortSignal;
+}
+
+/** Stop a process and everything it started (a shell's python child too). */
+function killTree(pid: number | undefined) {
+  if (!pid) return;
+  try {
+    if (process.platform === "win32") spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+    else process.kill(-pid, "SIGKILL");
+  } catch {
+    /* already gone */
+  }
+}
+
+/** Run `command` in the user's shell with the recorders switched on. Never throws for a failing command. */
+export function runDeepTrace(opts: DeepTraceOptions): Promise<DeepTraceResult> {
   const out = fs.mkdtempSync(path.join(os.tmpdir(), "br-trace-"));
-  const base = opts.env ?? process.env;
+  const base = withPyEnv(opts.env ?? process.env, opts.pyEnv);
   const env: NodeJS.ProcessEnv = {
     ...base,
     BR_TRACE_OUT: out,
@@ -40,9 +82,12 @@ export function runDeepTrace(opts: { root: string; command: string; cwd?: string
     PYTHONPATH: [path.join(opts.recorderDir, "br_trace"), base.PYTHONPATH].filter(Boolean).join(path.delimiter),
     NODE_V8_COVERAGE: out,
   };
+  const run = shellRun(opts.command, opts.shellPath);
   const t0 = Date.now();
   return new Promise((resolve) => {
-    const p = spawn(opts.command, { cwd: opts.cwd ?? opts.root, env, shell: true, windowsHide: true });
+    let stopped: DeepTraceResult["stopped"];
+    let finished = false;
+    const p = spawn(run.file, run.args, { cwd: opts.cwd ?? opts.root, env, shell: run.shell, windowsHide: true, detached: process.platform !== "win32" });
     let output = "";
     const keep = (d: Buffer) => {
       output += d.toString();
@@ -50,16 +95,70 @@ export function runDeepTrace(opts: { root: string; command: string; cwd?: string
     };
     p.stdout.on("data", keep);
     p.stderr.on("data", keep);
-    const timer = setTimeout(() => p.kill(), opts.timeoutMs ?? 300_000);
-    const done = (code: number | null) => {
-      clearTimeout(timer);
-      const records = readRecords(out, opts.root);
-      fs.rmSync(out, { recursive: true, force: true });
-      resolve({ exitCode: code, output, records, ms: Date.now() - t0 });
+    const stop = (why: NonNullable<DeepTraceResult["stopped"]>) => {
+      if (finished) return;
+      stopped ??= why;
+      killTree(p.pid);
     };
-    p.on("error", () => done(null));
+    const timer = setTimeout(() => stop("timeout"), opts.timeoutMs ?? 300_000);
+    const onAbort = () => stop("cancelled");
+    if (opts.signal?.aborted) onAbort();
+    opts.signal?.addEventListener("abort", onAbort);
+    const done = (code: number | null) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      opts.signal?.removeEventListener("abort", onAbort);
+      const recorders = readRecorderInfo(out);
+      const records = stopped ? [] : readRecords(out, opts.root);
+      fs.rmSync(out, { recursive: true, force: true });
+      resolve({ exitCode: code, output, records, ms: Date.now() - t0, stopped, recorders, shell: run.label, pyEnv: opts.pyEnv?.source });
+    };
+    p.on("error", (e) => {
+      output += `\n${e.message}`;
+      done(null);
+    });
     p.on("close", done);
   });
+}
+
+/** The recorder's own notes (interpreter, mode, whether line recording survived) from each py-*.json. */
+export function readRecorderInfo(dir: string): RecorderInfo[] {
+  const out: RecorderInfo[] = [];
+  let files: string[] = [];
+  try { files = fs.readdirSync(dir); } catch { return out; }
+  for (const f of files) {
+    if (!/^py-\d+\.json$/.test(f)) continue;
+    try {
+      const j = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")) as RecorderInfo;
+      out.push({ python: j.python, version: j.version, mode: j.mode, lines: j.lines });
+    } catch {
+      /* partial file */
+    }
+  }
+  return out;
+}
+
+/**
+ * Why a deep trace recorded nothing (or less than usual), in words a user can act on. Undefined when it
+ * looks fine. `res` is the run; `kind` what the command looked like.
+ */
+export function explainDeepTrace(res: DeepTraceResult): { level: "error" | "warning"; text: string } | undefined {
+  if (res.stopped === "cancelled") return { level: "warning", text: "Deep trace cancelled: nothing was recorded." };
+  if (res.stopped === "timeout") return { level: "error", text: "Deep trace stopped after the time limit: nothing was recorded. Try re-running a single failing test instead of the whole suite." };
+  const env = res.pyEnv ? ` (Python environment: ${res.pyEnv}, shell: ${res.shell})` : ` (shell: ${res.shell})`;
+  if (!res.records.length) {
+    if (/No module named|ModuleNotFoundError|ImportError/.test(res.output))
+      return { level: "error", text: `Deep trace recorded nothing: the re-run could not import your code${env}. It probably used a different Python environment than your terminal. Select your project's interpreter in VS Code (Python: Select Interpreter), or put it in .venv.` };
+    if (/is not recognized as|command not found|not found\s*$|cannot find the path/im.test(res.output))
+      return { level: "error", text: `Deep trace recorded nothing: the command was not found when re-run${env}.` };
+    if (res.exitCode === 0) return { level: "warning", text: "Deep trace recorded nothing, and the command passed this time (a flaky test?)." };
+    return { level: "error", text: `Deep trace recorded nothing${env}. It records Python and Node commands; commands run in containers, over SSH, or through tsx/ts-node are not recorded yet.` };
+  }
+  if (res.recorders.some((r) => r.lines === "replaced"))
+    return { level: "warning", text: "Another tracer (a coverage tool or debugger) took over line recording, so lines are missing; which functions ran and what they returned were still recorded. Re-running without --cov, or on Python 3.12+, records lines too." };
+  if (res.exitCode === 0) return { level: "warning", text: "The command passed when re-run (a flaky test?). The recording shows a passing run, so the ranking may be off." };
+  return undefined;
 }
 
 /**

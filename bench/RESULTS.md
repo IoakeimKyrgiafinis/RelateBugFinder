@@ -95,9 +95,9 @@ After a deep trace the panel lists, for each suspect, the lines that ran in the 
 
 | | Bugs | A fixed line is listed | Lines listed (avg) | Function length (avg) |
 |---|---|---|---|---|
-| Lines that ran in the failing test | 110 | 97% | 10.7 | 29.2 |
-| Lines that ran only in the failing test (when there are any) | 17 | 71% | 4.0 | 51.9 |
-| **What the panel shows** (the above, else the lines that ran) | 110 | 93% | 8.4 | 29.2 |
+| Lines that ran in the failing test | 110 | 97% | 10.6 | 29.2 |
+| Lines that ran only in the failing test (when there are any) | 17 | 76% | 5.2 | 42.6 |
+| **What the panel shows** (the above, else the lines that ran) | 110 | 94% | 9.1 | 29.2 |
 
 A fix that only adds code (no old line changed inside the function) blames the lines around the insertion.
 

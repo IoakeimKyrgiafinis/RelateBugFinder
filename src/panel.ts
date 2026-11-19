@@ -6,7 +6,7 @@ export type PanelMsg =
   | { type: "open"; file: string; line: number; lines?: number[] }
   | { type: "trace"; text: string }
   | { type: "blast"; target: string }
-  | { type: "askAi"; prompt: string }
+  | { type: "askAi"; prompt: string; code?: { id: string; file: string; startLine: number; endLine: number; lines: number[] }[] }
   | { type: "deepTrace" }
   | { type: "compareTests" }
   | { type: "ready" };
@@ -19,6 +19,10 @@ export interface DeepInfo {
   canCompare?: boolean;
   /** Set after "Compare with related passing tests". */
   spectrum?: { tests: number; passed: number; seconds: number };
+  /** Where it ran: "Python 3.12 from .venv, pwsh". */
+  env?: string;
+  /** Something the user should know about this recording (flaky pass, lines missing…). */
+  note?: string;
 }
 
 export type PanelState =
@@ -147,9 +151,12 @@ function renderTrace(r, input, s) {
   if (!r.suspects.length) { app.innerHTML = h + '<p>No suspects: ' + esc(r.note || "no frames matched this workspace") + "</p>" + pasteBox(input); return bindPaste(); }
   if (r.crashSite) h += '<p class="muted">Thrown in <a data-f="' + esc(r.crashSite.file) + '" data-l="' + r.crashSite.line + '">' + esc(r.crashSite.file) + ":" + r.crashSite.line + "</a> · ranked by recency × graph distance</p>";
   if (s && s.deep) h += '<div class="origin"><b>Deep trace</b><br>Re-ran <code>' + esc(s.command || "") + '</code> with recording (' + s.deep.seconds + ' s): ' + s.deep.functions + ' of your functions ran. Suspects that ran, especially just before the crash, now rank higher.' +
+    (s.deep.env ? ' <span class="muted">(' + esc(s.deep.env) + ')</span>' : "") +
+    (s.deep.note ? '<div class="err" style="margin-top:6px">' + esc(s.deep.note) + '</div>' : "") +
     (s.deep.spectrum ? '<br><b>Compared with ' + s.deep.spectrum.tests + ' related passing test' + (s.deep.spectrum.tests === 1 ? "" : "s") + '</b> (' + s.deep.spectrum.passed + ' passed, ' + s.deep.spectrum.seconds + ' s): functions that also run in passing tests now rank lower (Ochiai spectrum score).'
       : s.deep.canCompare ? '<div class="row" style="margin-top:6px"><button class="secondary" id="sbfl" title="Finds passing tests that exercise the same code (from the call graph), runs them with the recorder, and compares">Compare with related passing tests</button></div>' : "") + '</div>';
   else if (s && s.command) h += '<div class="row" style="margin:8px 0"><button class="secondary" id="deep" title="Runs the command again with a recorder attached, to see which functions actually ran before the crash">Deep trace: re-run <code>' + esc(s.command.length > 40 ? s.command.slice(0, 40) + "…" : s.command) + '</code> with recording</button></div>';
+  else if (s) h += '<p class="muted" style="margin:8px 0">Deep trace (re-run with a recorder to see what actually ran) needs the failing command: run it in a VS Code terminal with shell integration, and the panel will offer it.</p>';
   if (r.valueOrigin) h += '<div class="origin"><b>Where the ' + esc(r.valueOrigin.value) + " came from</b><br>" + esc(r.valueOrigin.summary).replace(/\x60([^\x60]+)\x60/g, "<code>$1</code>") + "</div>";
   const max = Math.max(...r.suspects.map((s) => s.score), 1);
   r.suspects.forEach((s, i) => {
@@ -167,7 +174,7 @@ function renderTrace(r, input, s) {
   app.innerHTML = h;
   bindLinks();
   document.getElementById("again").onclick = () => render({ mode: "welcome", clipboard: "" });
-  document.getElementById("ai").onclick = () => vscode.postMessage({ type: "askAi", prompt: aiPrompt(r) });
+  document.getElementById("ai").onclick = () => vscode.postMessage({ type: "askAi", prompt: aiPrompt(r), code: r.suspects.slice(0, 3).map((s) => ({ id: s.id, file: s.file, startLine: s.startLine, endLine: s.endLine, lines: hlLines(s) || [] })) });
   const d = document.getElementById("deep");
   if (d) d.onclick = () => { d.disabled = true; d.textContent = "Re-running with recording…"; vscode.postMessage({ type: "deepTrace" }); };
   const sb = document.getElementById("sbfl");
@@ -178,7 +185,12 @@ function aiPrompt(r) {
   const lines = ["I hit this error:", "", (r.note || "(see stack)"), ""];
   if (r.valueOrigin) lines.push("Where the bad value came from: " + r.valueOrigin.summary, "");
   lines.push( "The Blast-Radius code graph ranks these as the most likely root causes (recency of change × call-graph distance from the crash):");
-  r.suspects.slice(0, 5).forEach((s, i) => lines.push((i + 1) + ". " + s.id + " (" + s.file + ":" + s.startLine + "-" + s.endLine + ", " + s.relation + ") — " + s.reasons.map((x) => x.text).join("; ")));
+  r.suspects.slice(0, 5).forEach((s, i) => {
+    const L = hlLines(s);
+    const only = !!(s.lines && s.lines.failingOnly && s.lines.failingOnly.length);
+    lines.push((i + 1) + ". " + s.id + " (" + s.file + ":" + s.startLine + "-" + s.endLine + ", " + s.relation + ") — " + s.reasons.map((x) => x.text).join("; ") +
+      (L && L.length ? (only ? ". Lines that ran only in the failing test: " : ". Lines that ran in the failing test: ") + L.join(", ") : ""));
+  });
   lines.push("", "Read those functions first, explain the root cause, and propose a minimal fix. Use the blast-radius MCP tools (get_blast_radius) to check what else the fix could break.");
   return lines.join("\\n");
 }

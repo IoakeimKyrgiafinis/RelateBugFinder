@@ -46,6 +46,7 @@ const handlers = { start: [], end: [], lens: [] };
 const panels = [];
 const dialogs = [];
 const decorated = [];
+let clipboard = "";
 const ACCEPT =["Show suspects", "Re-run with recording", "Run related tests"];
 const disposable = { dispose() {} };
 const vscode = {
@@ -70,7 +71,7 @@ const vscode = {
     showWarningMessage: async (text, ...items) => { dialogs.push({ text, items: items.filter((x) => typeof x === "string") }); return items.find((x) => ACCEPT.includes(x)); },
     showInformationMessage: async (text) => (dialogs.push({ text, items: [] }), undefined),
     showErrorMessage: async (text) => (dialogs.push({ text, items: [] }), undefined),
-    withProgress: async (_o, f) => f({ report() {} }),
+    withProgress: async (_o, f) => f({ report() {} }, { onCancellationRequested() {} }),
     showTextDocument: async (doc) => ({ document: doc, setDecorations: (_t, ranges) => decorated.push({ file: doc.uri.fsPath, lines: ranges.map((r) => r.a.line + 1) }) }),
     createTextEditorDecorationType: (o) => ({ ...o, dispose() {} }),
     onDidStartTerminalShellExecution: (f) => (handlers.start.push(f), disposable),
@@ -86,7 +87,7 @@ const vscode = {
   },
   commands: { registerCommand: () => disposable, executeCommand: async () => undefined },
   languages: { registerCodeLensProvider: (_s, p) => (handlers.lens.push(p), disposable) },
-  env: { clipboard: { readText: async () => "", writeText: async () => undefined } },
+  env: { clipboard: { readText: async () => "", writeText: async (t) => { clipboard = t; } } },
   lm: { registerMcpServerDefinitionProvider: () => disposable },
 };
 const origResolve = Module._resolveFilename;
@@ -179,6 +180,17 @@ const ctx = { subscriptions: [], extensionPath: path.join(__dirname, ".."), exte
   await until(() => decorated.length, 3000, "editor decoration");
   assert.deepStrictEqual(decorated.at(-1).lines, [15], "editor should highlight line 15");
   ok(`order_total: "${card.querySelector(".lines").textContent.trim()}" → click opens pkg/pricing.py:15 with line 15 highlighted`);
+
+  // "Ask AI to fix": the prompt carries the returned value, the highlighted lines, and the suspects' code.
+  ui.doc.getElementById("ai").click();
+  const ask = JSON.parse(JSON.stringify(ui.sent.at(-1)));
+  assert.strictEqual(ask.type, "askAi");
+  await panel.webview.recv(ask);
+  await until(() => clipboard, 3000, "AI prompt");
+  assert.match(clipboard, /Returned `-10\.000000000000014`/, "prompt should name the returned value");
+  assert.match(clipboard, /Lines that ran only in the failing test: 15/, "prompt should list the failing-only lines");
+  assert.match(clipboard, />> 15 +total = bulk_discount\(total\)/, "prompt should include the code with >> on line 15");
+  ok(`AI prompt includes the returned value, the lines, and the code: "${clipboard.split("\n").find((l) => l.startsWith(">> 15"))}"`);
 
   // 4. The runs are in the live graph: ask the extension's MCP bridge (read-only Cypher).
   const info = JSON.parse(fs.readFileSync(path.join(root, ".vscode", "codegraph.bridge.json"), "utf8"));

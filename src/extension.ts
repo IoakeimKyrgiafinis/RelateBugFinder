@@ -5,7 +5,8 @@ import { CodeGraph } from "./core/graph";
 import { isIndexable, Workspace } from "./core/workspace";
 import { ago, blastRadius, codeLensInfo, traceSuspects } from "./core/analysis";
 import { parseStackTrace } from "./core/stackTrace";
-import { recordRun, runDeepTrace } from "./core/deepTrace";
+import { DeepTraceResult, explainDeepTrace, recordRun, runDeepTrace } from "./core/deepTrace";
+import { PyEnv, envOfInterpreter, findProjectVenv } from "./core/pyenv";
 import { relatedTests, testCommandFor } from "./core/spectrum";
 import type { TraceResult } from "./core/types";
 import { startBridge } from "./mcp/bridge";
@@ -126,9 +127,10 @@ export async function activate(ctx: vscode.ExtensionContext) {
     if (m.type === "deepTrace") return deepTrace(ctx);
     if (m.type === "compareTests") return compareTests(ctx);
     if (m.type === "askAi") {
-      await vscode.env.clipboard.writeText(m.prompt);
+      const prompt = m.prompt + suspectCode(m.code ?? []);
+      await vscode.env.clipboard.writeText(prompt);
       try {
-        await vscode.commands.executeCommand("workbench.action.chat.open", { query: m.prompt });
+        await vscode.commands.executeCommand("workbench.action.chat.open", { query: prompt });
       } catch {
         void vscode.window.showInformationMessage("Prompt copied to clipboard — paste it into your AI assistant.");
       }
@@ -225,7 +227,7 @@ export function deactivate() {
 let panelHandler: (m: PanelMsg) => void = () => undefined;
 
 /** The last failing terminal command (only those can be re-run by Deep trace). */
-let lastFailure: { text: string; command: string; cwd?: string } | undefined;
+let lastFailure: { text: string; command: string; cwd?: string; shellPath?: string } | undefined;
 
 async function showTrace(ctx: vscode.ExtensionContext, text: string) {
   if (!ready) return void vscode.window.showWarningMessage("Blast Radius is still indexing…");
@@ -253,26 +255,75 @@ Only continue if re-running it is safe (no deploys, payments or data changes).`,
   );
   if (go !== "Re-run with recording") return void BlastPanel.show(ctx.extensionUri, panelHandler, { mode: "trace", result: await serial(() => traceSuspects(graph!, root, f.text, cfg().get<number>("maxSuspects") ?? 10)), input: f.text, command: f.command });
   const t0 = Date.now();
-  const res = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Blast Radius: deep trace", cancellable: false }, async (p) => {
+  const pyEnv = await projectPyEnv();
+  const res = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Blast Radius: deep trace", cancellable: true }, async (p, token) => {
     p.report({ message: `re-running ${f.command}` });
-    return runDeepTrace({ root, command: f.command, cwd: f.cwd, recorderDir: path.join(ctx.extensionPath, "python") });
+    const stop = new AbortController();
+    token.onCancellationRequested(() => stop.abort());
+    return runDeepTrace({ root, command: f.command, cwd: f.cwd, recorderDir: path.join(ctx.extensionPath, "python"), shellPath: f.shellPath, pyEnv, signal: stop.signal });
   });
+  const problem = explainDeepTrace(res);
+  log(`deep trace: exit ${res.exitCode}, ${res.records.length} records, ${res.ms} ms, shell ${res.shell}, env ${res.pyEnv ?? "inherited"}${res.stopped ? `, ${res.stopped}` : ""}`);
   if (!res.records.length) {
-    void vscode.window.showWarningMessage("Deep trace recorded nothing. It works for Python and Node commands (not tsx/ts-node yet, nor commands run in containers).");
+    const msg = problem?.text ?? "Deep trace recorded nothing.";
+    if (problem?.level === "warning") void vscode.window.showWarningMessage(msg);
+    else void vscode.window.showErrorMessage(msg, "Show output").then((x) => x && showRunOutput(res.output));
     return;
   }
+  if (problem) void vscode.window.showWarningMessage(problem.text);
   const text = parseStackTrace(res.output).frames.length ? res.output.slice(-256 * 1024) : f.text;
   const { result, functions, runId } = await serial(() => {
     const run = recordRun(graph!, root, res.records, { command: f.command, failed: res.exitCode !== 0 });
     return { result: traceSuspects(graph!, root, text, cfg().get<number>("maxSuspects") ?? 10, { run: run.runId }), functions: run.functions, runId: run.runId };
   });
-  const deep: DeepInfo = { functions, seconds: Math.round((Date.now() - t0) / 100) / 10, exitCode: res.exitCode, canCompare: !!testCommandFor(f.command, { file: "t.py", qualifiedName: "T.test" }) };
-  lastDeep = { runId, text, command: f.command, cwd: f.cwd, deep };
+  const deep: DeepInfo = {
+    functions,
+    seconds: Math.round((Date.now() - t0) / 100) / 10,
+    exitCode: res.exitCode,
+    canCompare: !!testCommandFor(f.command, { file: "t.py", qualifiedName: "T.test" }),
+    env: describeEnv(res),
+    note: problem?.text,
+  };
+  lastDeep = { runId, text, command: f.command, cwd: f.cwd, shellPath: f.shellPath, deep };
   BlastPanel.show(ctx.extensionUri, panelHandler, { mode: "trace", result, input: text, command: f.command, deep });
 }
 
+/** "Python 3.12 from .venv, pwsh" for the panel, from what the recorder reported. */
+function describeEnv(res: DeepTraceResult): string {
+  const py = res.recorders.find((r) => r.version);
+  return [py ? `Python ${py.version}${res.pyEnv ? ` from ${res.pyEnv}` : ""}` : res.pyEnv ? `Python from ${res.pyEnv}` : "", res.shell].filter(Boolean).join(", ");
+}
+
+let runOutput: vscode.OutputChannel | undefined;
+/** Show the re-run's own output, so a failure to start (wrong env, missing tool) is visible. */
+function showRunOutput(text: string) {
+  runOutput ??= vscode.window.createOutputChannel("Blast Radius: deep trace run");
+  runOutput.clear();
+  runOutput.append(text.slice(-200_000));
+  runOutput.show(true);
+}
+
+/**
+ * The project's Python environment: VS Code's selected interpreter (Python extension), else a venv in the
+ * project folder (.venv, venv, env). Undefined → the extension host's PATH.
+ */
+async function projectPyEnv(): Promise<PyEnv | undefined> {
+  try {
+    const ext = vscode.extensions?.getExtension("ms-python.python");
+    if (ext) {
+      const api = ext.isActive ? ext.exports : await ext.activate();
+      const sel = api?.environments?.getActiveEnvironmentPath?.(vscode.Uri.file(root));
+      const env = sel?.path ? envOfInterpreter(sel.path, "VS Code's selected interpreter") : undefined;
+      if (env) return env;
+    }
+  } catch {
+    /* no Python extension, or its API changed */
+  }
+  return findProjectVenv(root);
+}
+
 /** The last deep trace, so its related passing tests can be compared against it. */
-let lastDeep: { runId: string; text: string; command: string; cwd?: string; deep: DeepInfo } | undefined;
+let lastDeep: { runId: string; text: string; command: string; cwd?: string; shellPath?: string; deep: DeepInfo } | undefined;
 
 /**
  * Spectrum-based localization: pick passing tests that exercise the code that ran just before the crash
@@ -298,19 +349,32 @@ async function compareTests(ctx: vscode.ExtensionContext) {
   );
   if (go !== "Run related tests") return show(d.deep);
   const t0 = Date.now();
-  let passed = 0;
-  await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Blast Radius: related passing tests", cancellable: false }, async (p) => {
-    for (let i = 0; i < cmds.length; i++) {
+  let passed = 0, ran = 0, cancelled = false;
+  const pyEnv = await projectPyEnv();
+  const failures: string[] = [];
+  await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Blast Radius: related passing tests", cancellable: true }, async (p, token) => {
+    const stop = new AbortController();
+    token.onCancellationRequested(() => stop.abort());
+    for (let i = 0; i < cmds.length && !stop.signal.aborted; i++) {
       p.report({ message: `${i + 1}/${cmds.length}`, increment: 100 / cmds.length });
-      const res = await runDeepTrace({ root, command: cmds[i], cwd: d.cwd, recorderDir: path.join(ctx.extensionPath, "python") });
+      const res = await runDeepTrace({ root, command: cmds[i], cwd: d.cwd, recorderDir: path.join(ctx.extensionPath, "python"), shellPath: d.shellPath, pyEnv, signal: stop.signal });
+      if (res.stopped === "cancelled") { cancelled = true; break; }
+      ran++;
       // Only passing tests are a contrast; a failing or erroring one (often setup) is left out.
-      if (res.exitCode !== 0 || !res.records.length) continue;
+      if (res.exitCode !== 0 || !res.records.length) {
+        failures.push(res.output);
+        continue;
+      }
       passed++;
       await serial(() => recordRun(graph!, root, res.records, { command: cmds[i], failed: false, session: d.runId }));
     }
   });
-  if (!passed) void vscode.window.showWarningMessage("None of the related tests passed with a recording, so the ranking is unchanged.");
-  const deep: DeepInfo = { ...d.deep, canCompare: false, spectrum: { tests: cmds.length, passed, seconds: Math.round((Date.now() - t0) / 100) / 10 } };
+  if (!passed)
+    void vscode.window.showWarningMessage(
+      cancelled ? "Cancelled before any related test passed, so the ranking is unchanged." : `None of the ${ran} related tests passed with a recording, so the ranking is unchanged.`,
+      ...(failures.length ? ["Show output"] : [])
+    ).then((x) => x && showRunOutput(failures.join("\n\n----------\n\n")));
+  const deep: DeepInfo = { ...d.deep, canCompare: cancelled && !passed, spectrum: passed || !cancelled ? { tests: ran, passed, seconds: Math.round((Date.now() - t0) / 100) / 10 } : undefined };
   lastDeep = { ...d, deep };
   return show(deep);
 }
@@ -319,6 +383,37 @@ async function showBlast(ctx: vscode.ExtensionContext, target: string) {
   if (!ready) return void vscode.window.showWarningMessage("Blast Radius is still indexing…");
   const result = await serial(() => blastRadius(graph!, root, target));
   BlastPanel.show(ctx.extensionUri, panelHandler, result ? { mode: "blast", result } : { mode: "error", message: `Nothing in the graph matches "${target}".` });
+}
+
+/**
+ * The top suspects' source for the AI prompt, numbered, with `>>` on the lines the deep trace highlights
+ * (ran only in the failing test, or ran at all). Long functions are cut around those lines.
+ */
+export function suspectCode(code: { id: string; file: string; startLine: number; endLine: number; lines: number[] }[]): string {
+  const parts: string[] = [];
+  for (const s of code) {
+    let src: string[];
+    try { src = fs.readFileSync(path.join(root, s.file), "utf8").split(/\r?\n/); } catch { continue; }
+    let a = s.startLine, b = Math.min(s.endLine, src.length);
+    if (b - a > 80) {
+      const mid = s.lines.length ? s.lines[0] : a;
+      a = Math.max(a, mid - 30);
+      b = Math.min(b, a + 80);
+    }
+    const mark = new Set(s.lines);
+    const width = String(b).length;
+    const body = src.slice(a - 1, b).map((t, i) => `${mark.has(a + i) ? ">>" : "  "} ${String(a + i).padStart(width)}  ${t}`).join("\n");
+    parts.push(`${s.file} (${s.id.split("#")[1]}):\n\`\`\`\n${body}\n\`\`\``);
+  }
+  if (!parts.length) return "";
+  const any = code.some((s) => s.lines.length);
+  return `\n\nSource of the top suspects${any ? " (>> marks lines the deep trace recorded as running in the failing test)" : ""}:\n\n${parts.join("\n\n")}`;
+}
+
+/** The shell a terminal runs: its own shellPath, else VS Code's default terminal shell. */
+function terminalShell(t: vscode.Terminal | undefined): string | undefined {
+  const opts = t?.creationOptions as vscode.TerminalOptions | undefined;
+  return opts?.shellPath || vscode.env?.shell || undefined;
 }
 
 let ranDecoration: vscode.TextEditorDecorationType | undefined;
@@ -368,7 +463,7 @@ function setupTerminal(ctx: vscode.ExtensionContext) {
       // A successful command that merely logged "Error" + a file:line (linters, test logs) is not a crash.
       if (e.exitCode === 0 && parsed.language === "unknown") return;
       const command = e.execution.commandLine?.value?.trim();
-      lastFailure = command ? { text, command, cwd: e.execution.cwd?.fsPath } : undefined;
+      lastFailure = command ? { text, command, cwd: e.execution.cwd?.fsPath, shellPath: terminalShell(e.terminal) } : undefined;
       const result = await serial(() => traceSuspects(graph!, root, text, cfg().get<number>("maxSuspects") ?? 10));
       const top = result.suspects[0];
       if (!top) return;
