@@ -3,7 +3,8 @@ import { mapToWorkspace, parseStackTrace } from "./stackTrace";
 import { BlastNode, BlastResult, Suspect, SuspectReason, TraceResult } from "./types";
 import { findValueOrigin, parseNullishError } from "./valueOrigin";
 import { nowSec } from "./clock";
-import { executedIn } from "./deepTrace";
+import { Executed, executedIn, failingOnlyLines } from "./deepTrace";
+import { BadValue, TRIVIAL, badValues, sameValue } from "./badValues";
 import { ochiai } from "./spectrum";
 
 /**
@@ -29,7 +30,7 @@ import { ochiai } from "./spectrum";
  *   (0.4 / 0.3 links sit below the crash site; they lead mostly when the stack ends inside a test.)
  */
 // Weights picked on the DEV half of the BugsInPy benchmark only (bench/tune.mjs); see bench/RESULTS.md.
-export const SCORING = { HALF_LIFE_H: 336, DIRTY: 1.0, FN_COMMIT: 0.9, FILE_COMMIT: 0.15, BASELINE: 0.02, FLOOR: 0.3, TEST_PENALTY: 0.2, UP_HOPS: 5, DOWN_HOPS: 2, SIBLING: 0.4, ORIGIN: 1.0, FIELD_WRITER: 0.6, FIELD_INIT: 0.5, FIELD_READ: 0.4, MEMBER: 0.3, RAN: 0.2, SINCE_K: 2, NOT_RAN: 1, SBFL_POW: 0.25 };
+export const SCORING = { HALF_LIFE_H: 336, DIRTY: 1.0, FN_COMMIT: 0.9, FILE_COMMIT: 0.15, BASELINE: 0.02, FLOOR: 0.3, TEST_PENALTY: 0.2, UP_HOPS: 5, DOWN_HOPS: 2, SIBLING: 0.4, ORIGIN: 1.0, FIELD_WRITER: 0.6, FIELD_INIT: 0.5, FIELD_READ: 0.4, MEMBER: 0.3, RAN: 0.3, SINCE_K: 5, NOT_RAN: 1, SBFL_POW: 0.25, RET_ORIGIN: 0.8, RET_PASS: 0.3, RET_WINDOW: 30 };
 
 const now = nowSec;
 const decay = (ts: number) => Math.pow(0.5, Math.max(0, now() - ts) / 3600 / SCORING.HALF_LIFE_H);
@@ -60,7 +61,7 @@ export function functionAtLine(g: CodeGraph, file: string, line: number): FnRow 
 // ------------------------------------------------------------------ trace
 
 /** Raw per-candidate signals, so the benchmark can re-weight scores offline without re-indexing. */
-export interface CandidateFeatures { id: string; relation: Suspect["relation"]; prox: number; kind: FileKind; dirty: boolean; fnTs: number | null; fileTs: number | null; origin: boolean; field: boolean; ran: boolean | null; since: number | null; ochiai?: number | null }
+export interface CandidateFeatures { id: string; relation: Suspect["relation"]; prox: number; kind: FileKind; dirty: boolean; fnTs: number | null; fileTs: number | null; origin: boolean; field: boolean; ran: boolean | null; since: number | null; ochiai?: number | null; ret?: 0 | 1 | 2 }
 
 export function traceSuspects(g: CodeGraph, root: string, traceText: string, limit = 12, opts: { features?: boolean; run?: string } = {}): TraceResult & { features?: CandidateFeatures[] } {
   const features: CandidateFeatures[] = [];
@@ -228,6 +229,18 @@ export function traceSuspects(g: CodeGraph, root: string, traceText: string, lim
     }
   }
 
+  // 2f. Who produced the bad value: the error names a value (an assertion's actual result, a number or key in
+  // the message, None) and the deep trace recorded what each function returned.
+  const retSig = new Map<string, 1 | 2>();
+  if (executed) {
+    for (const m of returnedBad(executed, badValues(parsed.message, traceText))) {
+      const c = cand.get(m.id);
+      if (!c) continue;
+      retSig.set(m.id, Math.max(retSig.get(m.id) ?? 0, m.origin ? 2 : 1) as 1 | 2);
+      c.reasons.unshift({ kind: "returned", text: m.origin ? `Returned \`${m.v}\`, the value in the error, before any other function did` : `Also returned \`${m.v}\` (passed it on)` });
+    }
+  }
+
   // 3. Recency signal for every candidate in one query.
   const ids = [...cand.keys()];
   const rec = g.q(
@@ -271,9 +284,11 @@ export function traceSuspects(g: CodeGraph, root: string, traceText: string, lim
     const kind = fileKind(c.fn.file);
     const ex = executed ? executed.get(c.fn.id) ?? null : undefined;
     const och = sb ? sb.get(c.fn.id)?.ochiai ?? null : undefined;
-    const score = scoreOf({ prox: effectiveProx(c.prox, c.relation, ex, och), recency, kind });
-    const warm = recency > SCORING.BASELINE || c.reasons.some((x) => x.kind === "value-origin" || x.kind === "field") || !!ex;
-    if (opts.features) features.push({ id: c.fn.id, relation: c.relation, prox: c.prox, kind, dirty: !!r.dirty, fnTs: commits[0]?.ts ?? null, fileTs: fileCommits[0]?.ts ?? null, origin: c.reasons.some((x) => x.kind === "value-origin"), field: c.reasons.some((x) => x.kind === "field"), ran: ex === undefined ? null : !!ex, since: ex ? ex.since : null, ochiai: och === undefined ? undefined : och });
+    const ret = retSig.get(c.fn.id);
+    const prox = Math.max(c.prox, ret === 2 ? SCORING.RET_ORIGIN : ret === 1 ? SCORING.RET_PASS : 0);
+    const score = scoreOf({ prox: effectiveProx(prox, c.relation, ex, och), recency, kind });
+    const warm = recency > SCORING.BASELINE || c.reasons.some((x) => x.kind === "value-origin" || x.kind === "field" || x.kind === "returned") || !!ex;
+    if (opts.features) features.push({ id: c.fn.id, relation: c.relation, prox: c.prox, kind, dirty: !!r.dirty, fnTs: commits[0]?.ts ?? null, fileTs: fileCommits[0]?.ts ?? null, origin: c.reasons.some((x) => x.kind === "value-origin"), field: c.reasons.some((x) => x.kind === "field"), ran: ex === undefined ? null : !!ex, since: ex ? ex.since : null, ochiai: och === undefined ? undefined : och, ret: retSig.get(c.fn.id) ?? 0 });
     suspects.push({ ...c.fn, score: Math.round(score * 1000) / 10, hops: c.hops, relation: c.relation, reasons: c.reasons, lastChange, warm } as Suspect & { warm: boolean });
   }
 
@@ -283,6 +298,14 @@ export function traceSuspects(g: CodeGraph, root: string, traceText: string, lim
     .map(({ warm: _w, ...s }) => s as Suspect)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
+  // Which lines ran (and, with passing runs to compare, which ran only in the failure).
+  if (executed) {
+    const only = sb ? failingOnlyLines(g, opts.run!) : undefined;
+    for (const s of ranked) {
+      const e = executed.get(s.id);
+      if (e?.lines.length) s.lines = { ran: e.lines, ...(only?.has(s.id) ? { failingOnly: only.get(s.id) } : {}) };
+    }
+  }
   const keep = ranked.map((s) => s.id);
   const edges = g.q("MATCH (a:Function)-[:CALLS]->(b:Function) WHERE a.id IN $ids AND b.id IN $ids RETURN a.id AS from, b.id AS to", { ids: keep }) as { from: string; to: string }[];
   return {
@@ -294,6 +317,29 @@ export function traceSuspects(g: CodeGraph, root: string, traceText: string, lim
     valueOrigin,
     ...(opts.features ? { features } : {}),
   };
+}
+
+/**
+ * Functions whose recorded return values include a value the error names. Per value, the producers that
+ * returned it within the last RET_WINDOW returns form the chain that carried it to the failure; the one that
+ * returned it earliest is its origin, the rest passed it on. A trivial value (0, True, None…) only counts when
+ * at most 3 functions returned it, and None only for functions that at other times returned something else.
+ */
+export function returnedBad(executed: Map<string, Executed>, bad: BadValue[]): { id: string; v: string; origin: boolean }[] {
+  const out: { id: string; v: string; origin: boolean }[] = [];
+  for (const b of bad) {
+    const producers: { id: string; ago: number }[] = [];
+    for (const [id, e] of executed) {
+      const hit = e.rets.find((r) => sameValue(r.v, b.v));
+      if (!hit || hit.ago > SCORING.RET_WINDOW) continue;
+      if (b.v === "None" && !e.rets.some((r) => r.v !== "None")) continue; // a procedure, not a producer of None
+      producers.push({ id, ago: hit.ago });
+    }
+    if (!producers.length || (TRIVIAL.has(b.v) && producers.length > 3)) continue;
+    const first = Math.max(...producers.map((p) => p.ago));
+    for (const p of producers) if (!out.some((o) => o.id === p.id)) out.push({ id: p.id, v: b.v, origin: p.ago === first });
+  }
+  return out;
 }
 
 /**

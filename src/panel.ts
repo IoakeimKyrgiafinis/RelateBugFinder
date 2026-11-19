@@ -3,7 +3,7 @@ import { randomBytes } from "crypto";
 import type { BlastResult, TraceResult } from "./core/types";
 
 export type PanelMsg =
-  | { type: "open"; file: string; line: number }
+  | { type: "open"; file: string; line: number; lines?: number[] }
   | { type: "trace"; text: string }
   | { type: "blast"; target: string }
   | { type: "askAi"; prompt: string }
@@ -92,6 +92,7 @@ function html(nonce: string): string {
   .chip.value-origin { background: var(--warm); color: var(--vscode-editor-background); border-color: var(--warm); }
   .chip.uncommitted { background: var(--hot); color: var(--vscode-editor-background); border-color: var(--hot); }
   ul.reasons { margin: 4px 0 0 0; padding-left: 18px; } ul.reasons li { margin: 1px 0; }
+  .lines { margin-top: 4px; font-size: 0.92em; } .lines .chip { margin-right: 4px; }
   .score { text-align: right; min-width: 70px; } .bar { height: 5px; border-radius: 3px; background: var(--vscode-panel-border); margin-top: 4px; overflow: hidden; } .bar > i { display: block; height: 100%; background: var(--hot); }
   .actions { grid-column: 2 / 4; display: flex; gap: 8px; margin-top: 4px; }
   .actions a { font-size: .9em; }
@@ -107,7 +108,22 @@ function html(nonce: string): string {
 const vscode = acquireVsCodeApi();
 const app = document.getElementById("app");
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const open = (file, line) => vscode.postMessage({ type: "open", file, line });
+const open = (file, line, lines) => vscode.postMessage({ type: "open", file, line, lines });
+
+/** Lines to highlight for a suspect after a deep trace: those that ran only in the failure, else those that ran. */
+function hlLines(s) { return s.lines ? (s.lines.failingOnly && s.lines.failingOnly.length ? s.lines.failingOnly : s.lines.ran) : null; }
+
+/** "13–16, 19" from [13,14,15,16,19], each range a link that opens the file there with the lines highlighted. */
+function linesHtml(s) {
+  const L = hlLines(s);
+  if (!L || !L.length) return "";
+  const only = !!(s.lines.failingOnly && s.lines.failingOnly.length);
+  const runs = [];
+  for (const n of L) { const r = runs[runs.length - 1]; if (r && n === r[1] + 1) r[1] = n; else runs.push([n, n]); }
+  const hl = esc(JSON.stringify(L));
+  const links = runs.map((r) => '<a data-f="' + esc(s.file) + '" data-l="' + r[0] + '" data-hl="' + hl + '">' + (r[0] === r[1] ? r[0] : r[0] + "–" + r[1]) + "</a>").join(", ");
+  return '<div class="lines muted">' + (only ? '<span class="chip ran">ran only in the failing test</span> lines ' : "Lines that ran in the failing test: ") + links + "</div>";
+}
 const shortName = (id) => id.split("#")[1] || id;
 let last;
 
@@ -139,10 +155,10 @@ function renderTrace(r, input, s) {
   r.suspects.forEach((s, i) => {
     const dirty = s.reasons.some((x) => x.kind === "uncommitted");
     h += '<div class="card' + (i === 0 ? " top" : "") + '"><div class="rank">' + (i + 1) + "</div><div>" +
-      '<div class="name"><a data-f="' + esc(s.file) + '" data-l="' + s.startLine + '">' + esc(shortName(s.id)) + "</a></div>" +
+      '<div class="name"><a data-f="' + esc(s.file) + '" data-l="' + s.startLine + '"' + (hlLines(s) ? ' data-hl="' + esc(JSON.stringify(hlLines(s))) + '"' : "") + '>' + esc(shortName(s.id)) + "</a></div>" +
       '<div class="loc mono">' + esc(s.file) + ":" + s.startLine + "</div>" +
       '<div class="chips"><span class="chip ' + s.relation + '">' + s.relation.replace("-", " ") + (s.hops ? " · " + s.hops + " hop" + (s.hops > 1 ? "s" : "") : "") + "</span>" + (dirty ? '<span class="chip uncommitted">uncommitted</span>' : "") + (s.reasons.some((x) => x.kind === "value-origin") ? '<span class="chip value-origin">source of the ' + esc(r.valueOrigin ? r.valueOrigin.value : "bad value") + "</span>" : "") + "</div>" +
-      '<ul class="reasons">' + s.reasons.map((x) => "<li>" + esc(x.text).replace(/\x60([^\x60]+)\x60/g, "<code>$1</code>") + "</li>").join("") + "</ul></div>" +
+      '<ul class="reasons">' + s.reasons.map((x) => "<li>" + esc(x.text).replace(/\x60([^\x60]+)\x60/g, "<code>$1</code>") + "</li>").join("") + "</ul>" + linesHtml(s) + "</div>" +
       '<div class="score"><b>' + s.score.toFixed(1) + '</b><div class="bar"><i style="width:' + (100 * s.score / max) + '%"></i></div></div>' +
       '<div class="actions"><a data-f="' + esc(s.file) + '" data-l="' + s.startLine + '">Open</a><a data-blast="' + esc(s.id) + '">Blast radius</a>' + (s.lastChange ? '<span class="muted mono">' + esc(s.lastChange.hash.slice(0, 7)) + "</span>" : "") + "</div></div>";
   });
@@ -188,7 +204,7 @@ function renderBlast(r) {
 }
 
 function bindLinks() {
-  app.querySelectorAll("[data-f]").forEach((a) => (a.onclick = () => open(a.dataset.f, Number(a.dataset.l))));
+  app.querySelectorAll("[data-f]").forEach((a) => (a.onclick = () => open(a.dataset.f, Number(a.dataset.l), a.dataset.hl ? JSON.parse(a.dataset.hl) : undefined)));
   app.querySelectorAll("[data-blast]").forEach((a) => (a.onclick = () => vscode.postMessage({ type: "blast", target: a.dataset.blast })));
 }
 

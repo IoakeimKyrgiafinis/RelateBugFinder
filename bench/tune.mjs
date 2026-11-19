@@ -41,9 +41,10 @@ function rank(b, P) {
     if (c.fnTs != null) rec = Math.max(rec, P.FN_COMMIT * decay(c.fnTs));
     else if (c.fileTs != null) rec = Math.max(rec, P.FILE_COMMIT * decay(c.fileTs));
     const ran = useDeep ? c.ran : undefined;
-    const warm = rec > P.BASELINE || c.origin || c.field || !!ran;
+    const ret = useDeep ? c.ret ?? 0 : 0;
+    const warm = rec > P.BASELINE || c.origin || c.field || !!ran || ret > 0;
     if (!(c.relation === "crash-site" || c.relation === "in-stack" || warm)) continue;
-    let prox = c.prox;
+    let prox = Math.max(c.prox, ret === 2 ? P.RET_ORIGIN ?? 0 : ret === 1 ? P.RET_PASS ?? 0 : 0);
     const onStack = c.relation === "crash-site" || c.relation === "in-stack";
     if (ran === true) prox = Math.max(prox, P.RAN / (1 + c.since / P.SINCE_K)) * (P.SBFL && b.sbfl && !(P.SBFL_OFFSTACK && onStack) ? Math.pow(c.ochiai ?? 0, P.SBFL_POW) : 1);
     else if (ran === false && c.relation !== "crash-site" && c.relation !== "in-stack") prox *= P.NOT_RAN;
@@ -71,7 +72,7 @@ const metrics = (set, P) => {
 const better = (m, b) => m.mrr > b.mrr + 1e-9 || (Math.abs(m.mrr - b.mrr) < 1e-9 && m.top3 > b.top3);
 
 // As shipped in src/core/analysis.ts SCORING.
-export const SHIPPED = { HALF_LIFE_H: 336, DIRTY: 1, FN_COMMIT: 0.9, FILE_COMMIT: 0.15, BASELINE: 0.02, FLOOR: 0.3, TEST_PENALTY: 0.2, DEEP: false, RAN: 0.2, SINCE_K: 2, NOT_RAN: 1, SBFL_POW: 0.25, SBFL_OFFSTACK: true };
+export const SHIPPED = { HALF_LIFE_H: 336, DIRTY: 1, FN_COMMIT: 0.9, FILE_COMMIT: 0.15, BASELINE: 0.02, FLOOR: 0.3, TEST_PENALTY: 0.2, DEEP: false, RAN: 0.3, SINCE_K: 5, NOT_RAN: 1, SBFL_POW: 0.25, SBFL_OFFSTACK: true, RET_ORIGIN: 0.8, RET_PASS: 0.3 };
 const dev = bugs.filter((b) => b.dev), held = bugs.filter((b) => !b.dev);
 
 let base = { P: SHIPPED, m: metrics(dev, SHIPPED) };
@@ -102,6 +103,17 @@ for (const SBFL_OFFSTACK of [false, true])
     const P = { ...deep.P, SBFL: true, SBFL_POW, SBFL_OFFSTACK };
     const m = metrics(dev, P);
     if (better(m, sbfl.m)) sbfl = { P, m };
+  }
+
+// Returned values (deep trace): weight of the function that first returned the value the error names
+// (RET_ORIGIN) and of those that passed it on (RET_PASS). Deep + SBFL weights as found above.
+const retBase = { ...sbfl.P };
+let ret = { P: retBase, m: metrics(dev, retBase) };
+for (const RET_ORIGIN of [0, 0.3, 0.5, 0.8, 1, 1.5])
+  for (const RET_PASS of [0, 0.1, 0.3, 0.5]) {
+    const P = { ...sbfl.P, RET_ORIGIN, RET_PASS };
+    const m = metrics(dev, P);
+    if (better(m, ret.m)) ret = { P, m };
   }
 
 // Experiment (not shipped): bonus for the newest change among the functions that ran. The fix is that function in
@@ -137,3 +149,8 @@ for (const [k, vs] of Object.entries({ RAN: [0.3, 0.7], SINCE_K: [5, 50], NOT_RA
 
 console.log("\nNewest change among functions that ran (experiment; deep + SBFL as shipped):");
 for (const r of newestRows) console.log(`  NEWEST=${r.P.NEWEST} days=${r.P.NEWEST_DAYS || "any"}${r.P.NEWEST_STACK ? " +stack" : ""}`.padEnd(30), "dev", fmt(r.dev), "| held", fmt(r.held));
+
+console.log(`\n${bugs.filter((b) => b.features.some((c) => c.ret)).length} bugs where a recorded return value matched a value in the error`);
+show("Returned values OFF (deep + SBFL)", { ...sbfl.P, RET_ORIGIN: 0, RET_PASS: 0 });
+show("Returned values, shipped weights", { ...sbfl.P, RET_ORIGIN: SHIPPED.RET_ORIGIN, RET_PASS: SHIPPED.RET_PASS });
+show("Best returned-value weights on dev", ret.P);

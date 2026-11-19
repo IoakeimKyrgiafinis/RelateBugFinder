@@ -23,6 +23,7 @@ if (!fs.existsSync(path.join(repo, "dist", "extension.js"))) run(["esbuild.mjs"]
 run(["test/stack-trace.cjs"], "Stack-trace parsing (pytest long/short, Python, Node, Windows paths)");
 run(["test/value-origin.cjs"], "Where did the undefined come from? (TS/JS/Python unit cases)");
 run(["test/missing-field.cjs"], "Which field was missing? (Python AttributeError, self./this. fields)");
+run(["test/bad-values.cjs"], "Which values does an error name? Who returned them first? (assertions, messages, None)");
 const a = fresh();
 run(["test/mcp-lock.mjs", a], "MCP server with VS Code closed (in-memory graph, no file lock)");
 run(["test/mcp-e2e.mjs", a, path.join(a, "trace.txt")], "MCP tools, standalone");

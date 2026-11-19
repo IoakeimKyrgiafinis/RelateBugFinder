@@ -19,7 +19,7 @@ import { CodeGraph, TEST_FILE_RE } from "../src/core/graph";
 import { Workspace } from "../src/core/workspace";
 import { functionAtLine, traceSuspects } from "../src/core/analysis";
 import { pinClock } from "../src/core/clock";
-import { readRecords, recordRun } from "../src/core/deepTrace";
+import { executedIn, failingOnlyLines, readRecords, recordRun } from "../src/core/deepTrace";
 
 async function main() {
   const [root, traceFile, patchFile, asOfStr, featuresFile, deepDir] = process.argv.slice(2);
@@ -71,6 +71,23 @@ async function main() {
   const rs = passRuns ? traceSuspects(g, root, trace, 500, { features: !!featuresFile, run: run!.runId }) : undefined;
   const blastSbfl = rs?.suspects.map((s) => s.id);
 
+  // Lines: for each fixed function, did the lines the fix changed run, and are they among the lines that
+  // ran only in the failing run (what the panel highlights after comparing with passing tests)?
+  let lines: Record<string, unknown> | undefined;
+  if (run) {
+    const ex = executedIn(g, run.runId);
+    const only = passRuns ? failingOnlyLines(g, run.runId) : undefined;
+    const per = [...truth].map((id) => {
+      const fn = g.q("MATCH (f:Function {id:$id}) RETURN f.file AS file, f.startLine AS s, f.endLine AS e", { id })[0];
+      const fixed = new Set<number>();
+      for (const [a, b] of changed.get(fn.file as string) ?? []) for (let l = Math.max(a, fn.s as number); l <= Math.min(b, fn.e as number); l++) fixed.add(l);
+      const ran = ex.get(id)?.lines ?? [];
+      const fo = only?.get(id);
+      return { id, len: (fn.e as number) - (fn.s as number) + 1, fixed: [...fixed], ran: ran.length, fixedRan: ran.some((l) => fixed.has(l)), failingOnly: fo?.length ?? null, fixedInFailingOnly: fo ? fo.some((l) => fixed.has(l)) : null };
+    });
+    lines = { per };
+  }
+
   const stack: string[] = [];
   for (const f of r.frames) {
     if (!f.relPath) continue;
@@ -109,6 +126,7 @@ async function main() {
       ranks: { blast: rankOf(blast), blastDeep: blastDeep ? rankOf(blastDeep) : undefined, blastSbfl: blastSbfl ? rankOf(blastSbfl) : undefined, stack: rankOf(stack), sentry: rankOf(sentry), recent: rankOf(recent) },
       deep: run ? { functionsRan: run.functions, truthRan: [...truth].some((id) => records.length > 0 && rd!.suspects.some((s) => s.id === id && s.reasons.some((x) => x.kind === "ran"))) } : undefined,
       sbfl: rs ? { passingRuns: passRuns } : undefined,
+      lines,
       topDeep: rd?.suspects.slice(0, 5).map((s) => ({ id: s.id, score: s.score, why: s.reasons.map((x) => x.text) })),
       candidates: { blast: blast.length, stack: stack.length },
       top,

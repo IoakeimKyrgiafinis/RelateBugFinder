@@ -71,6 +71,23 @@ ${noTruth ? `${noTruth} reproduced bug(s) are excluded from scoring because the 
 `;
 for (const [title, set] of groups) md += `\n### ${title} (n = ${set.length})\n\n${set.length ? table(set) : "_none_"}\n`;
 
+// Lines inside the fixed function (deep trace line recording).
+{
+  const withLines = scored.filter((r) => r.lines?.per?.some((p) => p.ran > 0));
+  const avg = (set, f) => (set.length ? (set.reduce((s, r) => s + f(r), 0) / set.length).toFixed(1) : "–");
+  const first = (r) => r.lines.per.find((p) => p.ran > 0);
+  // The panel shows the failing-only lines when there are any, else the lines that ran.
+  const only = withLines.filter((r) => first(r).failingOnly > 0);
+  const shownHit = (r) => (first(r).failingOnly > 0 ? first(r).fixedInFailingOnly : first(r).fixedRan);
+  const shownLen = (r) => (first(r).failingOnly > 0 ? first(r).failingOnly : first(r).ran);
+  md += `\n## Lines inside the fixed function\n\nAfter a deep trace the panel lists, for each suspect, the lines that ran in the failing test. After comparing with related passing tests, it lists the lines that ran **only in the failing test** instead, when there are any. Clicking highlights them in the editor. Ground truth: the lines the real fix changed.\n\n`;
+  md += `| | Bugs | A fixed line is listed | Lines listed (avg) | Function length (avg) |\n|---|---|---|---|---|\n`;
+  md += `| Lines that ran in the failing test | ${withLines.length} | ${pct(withLines.filter((r) => first(r).fixedRan).length, withLines.length)} | ${avg(withLines, (r) => first(r).ran)} | ${avg(withLines, (r) => first(r).len)} |\n`;
+  md += `| Lines that ran only in the failing test (when there are any) | ${only.length} | ${pct(only.filter((r) => first(r).fixedInFailingOnly).length, only.length)} | ${avg(only, (r) => first(r).failingOnly)} | ${avg(only, (r) => first(r).len)} |\n`;
+  md += `| **What the panel shows** (the above, else the lines that ran) | ${withLines.length} | ${pct(withLines.filter(shownHit).length, withLines.length)} | ${avg(withLines, shownLen)} | ${avg(withLines, (r) => first(r).len)} |\n`;
+  md += `\nA fix that only adds code (no old line changed inside the function) blames the lines around the insertion.\n`;
+}
+
 md += `\n## Per bug\n\n| Bug | Kind | Fixed function | On stack | Changed ≤30d | Blast | +Deep | +Passing tests | Stack | Sentry | Recent |\n|---|---|---|---|---|---|---|---|---|---|---|\n`;
 for (const r of scored.sort((a, b) => a.bug.localeCompare(b.bug, undefined, { numeric: true }))) {
   const f = (x) => (x === null || x === undefined ? "–" : `#${x}`);

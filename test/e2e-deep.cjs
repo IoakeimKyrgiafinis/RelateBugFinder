@@ -45,7 +45,8 @@ class EventEmitter { constructor() { this.l = []; this.event = (f) => (this.l.pu
 const handlers = { start: [], end: [], lens: [] };
 const panels = [];
 const dialogs = [];
-const ACCEPT = ["Show suspects", "Re-run with recording", "Run related tests"];
+const decorated = [];
+const ACCEPT =["Show suspects", "Re-run with recording", "Run related tests"];
 const disposable = { dispose() {} };
 const vscode = {
   EventEmitter,
@@ -55,7 +56,8 @@ const vscode = {
   CodeLens: class { constructor(range, command) { this.range = range; this.command = command; } },
   RelativePattern: class { constructor(b, p) { this.base = b; this.pattern = p; } },
   McpStdioServerDefinition: class { constructor(label, command, args, env, version) { Object.assign(this, { label, command, args, env, version }); } },
-  StatusBarAlignment: { Left: 1 }, ViewColumn: { One: 1, Beside: -2 }, ProgressLocation: { Notification: 15 },
+  StatusBarAlignment: { Left: 1 }, ViewColumn: { One: 1, Beside: -2 }, ProgressLocation: { Notification: 15 }, OverviewRulerLane: { Left: 1 },
+  ThemeColor: class { constructor(id) { this.id = id; } },
   window: {
     createOutputChannel: () => ({ appendLine: (m) => process.env.VERBOSE && console.log("   log:", m), show() {}, dispose() {} }),
     createStatusBarItem: () => ({ show() {}, dispose() {}, text: "" }),
@@ -69,7 +71,8 @@ const vscode = {
     showInformationMessage: async (text) => (dialogs.push({ text, items: [] }), undefined),
     showErrorMessage: async (text) => (dialogs.push({ text, items: [] }), undefined),
     withProgress: async (_o, f) => f({ report() {} }),
-    showTextDocument: async () => undefined,
+    showTextDocument: async (doc) => ({ document: doc, setDecorations: (_t, ranges) => decorated.push({ file: doc.uri.fsPath, lines: ranges.map((r) => r.a.line + 1) }) }),
+    createTextEditorDecorationType: (o) => ({ ...o, dispose() {} }),
     onDidStartTerminalShellExecution: (f) => (handlers.start.push(f), disposable),
     onDidEndTerminalShellExecution: (f) => (handlers.end.push(f), disposable),
     onDidCloseTerminal: () => disposable,
@@ -160,6 +163,22 @@ const ctx = { subscriptions: [], extensionPath: path.join(__dirname, ".."), exte
   assert.ok(!ui.doc.getElementById("sbfl"), "Compare button should be gone after comparing");
   ok(`panel box: "${ui.doc.querySelector(".origin").textContent.match(/Compared with[^)]*[)]/)[0]}"`);
   ok(`bulk_discount: ${bd3.reasons.map((r) => r.text).join(" | ")}`);
+
+  // The bad value's producer is #1, and the lines that ran only in the failure are shown and highlighted.
+  assert.strictEqual(shortName(s3.result.suspects[0]), "bulk_discount", "the function that returned the bad value should be #1");
+  assert.ok(bd3.reasons[0].kind === "returned" && /-10\.000000000000014/.test(bd3.reasons[0].text));
+  const ot = s3.result.suspects.find((s) => shortName(s) === "order_total");
+  assert.deepStrictEqual(ot.lines.failingOnly, [15], "order_total: only `total = bulk_discount(total)` ran only in the failure");
+  const card = [...ui.doc.querySelectorAll(".card")].find((c) => c.querySelector(".name").textContent.includes("order_total"));
+  const lineLink = card.querySelector(".lines a");
+  assert.ok(lineLink && /ran only in the failing test/.test(card.querySelector(".lines").textContent), "line block missing");
+  lineLink.click();
+  const openMsg = JSON.parse(JSON.stringify(ui.sent.at(-1)));
+  assert.deepStrictEqual([openMsg.type, openMsg.line, openMsg.lines], ["open", 15, [15]]);
+  await panel.webview.recv(openMsg);
+  await until(() => decorated.length, 3000, "editor decoration");
+  assert.deepStrictEqual(decorated.at(-1).lines, [15], "editor should highlight line 15");
+  ok(`order_total: "${card.querySelector(".lines").textContent.trim()}" → click opens pkg/pricing.py:15 with line 15 highlighted`);
 
   // 4. The runs are in the live graph: ask the extension's MCP bridge (read-only Cypher).
   const info = JSON.parse(fs.readFileSync(path.join(root, ".vscode", "codegraph.bridge.json"), "utf8"));

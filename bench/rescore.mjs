@@ -20,7 +20,7 @@ execFileSync("node", [path.join(REPO, "node_modules", "esbuild", "bin", "esbuild
 
 const latest = new Map(fs.readFileSync(OUT, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).map((r) => [r.bug, r]));
 const todo = [...latest.values()].filter((r) => r.stage === "reproduced" || (r.stage === "env-error" && r.envReason && r.envReason !== "no frame in the project's code"));
-const KEYS = ["deep", "sbfl", "topDeep", "index", "message", "frames", "framesInWorkspace", "crashSite", "crashInTest", "valueOrigin", "truth", "truthModuleLevelOnly", "truthChangedInWindow", "truthOnStack", "ranks", "candidates", "top", "error"];
+const KEYS = ["deep", "sbfl", "lines", "topDeep", "index", "message", "frames", "framesInWorkspace", "crashSite", "crashInTest", "valueOrigin", "truth", "truthModuleLevelOnly", "truthChangedInWindow", "truthOnStack", "ranks", "candidates", "top", "error"];
 
 async function rescore(r) {
   const [project, id] = r.bug.split(":");

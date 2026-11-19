@@ -120,7 +120,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
   // ---- panel ------------------------------------------------------------------
   const onPanelMsg = async (m: PanelMsg) => {
-    if (m.type === "open") return openAt(m.file, m.line);
+    if (m.type === "open") return openAt(m.file, m.line, m.lines);
     if (m.type === "trace") return showTrace(ctx, m.text);
     if (m.type === "blast") return showBlast(ctx, m.target);
     if (m.type === "deepTrace") return deepTrace(ctx);
@@ -321,10 +321,21 @@ async function showBlast(ctx: vscode.ExtensionContext, target: string) {
   BlastPanel.show(ctx.extensionUri, panelHandler, result ? { mode: "blast", result } : { mode: "error", message: `Nothing in the graph matches "${target}".` });
 }
 
-async function openAt(file: string, line: number) {
+let ranDecoration: vscode.TextEditorDecorationType | undefined;
+
+/** Open a file at a line; after a deep trace, highlight the lines that ran (only in the failure, when compared). */
+async function openAt(file: string, line: number, lines?: number[]) {
   const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(path.join(root, file)));
   const pos = new vscode.Position(Math.max(0, line - 1), 0);
-  await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One, selection: new vscode.Range(pos, pos) });
+  const editor = await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One, selection: new vscode.Range(pos, pos) });
+  if (!editor?.setDecorations || !vscode.window.createTextEditorDecorationType) return;
+  ranDecoration ??= vscode.window.createTextEditorDecorationType({
+    isWholeLine: true,
+    backgroundColor: new vscode.ThemeColor("diffEditor.removedLineBackground"),
+    overviewRulerColor: new vscode.ThemeColor("editorOverviewRuler.errorForeground"),
+    overviewRulerLane: vscode.OverviewRulerLane.Left,
+  });
+  editor.setDecorations(ranDecoration, (lines ?? []).map((l) => new vscode.Range(new vscode.Position(l - 1, 0), new vscode.Position(l - 1, 0))));
 }
 
 // ------------------------------------------------------------------- terminal

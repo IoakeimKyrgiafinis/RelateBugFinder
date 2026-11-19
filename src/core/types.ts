@@ -69,7 +69,7 @@ export interface StackFrame {
 }
 
 export interface SuspectReason {
-  kind: "value-origin" | "field" | "ran" | "uncommitted" | "commit" | "file-commit" | "in-stack" | "caller" | "callee";
+  kind: "value-origin" | "field" | "ran" | "returned" | "uncommitted" | "commit" | "file-commit" | "in-stack" | "caller" | "callee";
   text: string;
 }
 
@@ -84,6 +84,8 @@ export interface Suspect {
   relation: "crash-site" | "in-stack" | "upstream" | "downstream" | "ran";
   reasons: SuspectReason[];
   lastChange?: { hash: string; author: string; ts: number; message: string };
+  /** After a deep trace: the function's lines that ran, and (with passing runs) those that ran only in the failure. */
+  lines?: { ran: number[]; failingOnly?: number[] };
 }
 
 export interface TraceResult {
