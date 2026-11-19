@@ -20,7 +20,7 @@ execFileSync("node", [path.join(REPO, "node_modules", "esbuild", "bin", "esbuild
 
 const latest = new Map(fs.readFileSync(OUT, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).map((r) => [r.bug, r]));
 const todo = [...latest.values()].filter((r) => r.stage === "reproduced" || (r.stage === "env-error" && r.envReason && r.envReason !== "no frame in the project's code"));
-const KEYS = ["deep", "topDeep", "index", "message", "frames", "framesInWorkspace", "crashSite", "crashInTest", "valueOrigin", "truth", "truthModuleLevelOnly", "truthChangedInWindow", "truthOnStack", "ranks", "candidates", "top", "error"];
+const KEYS = ["deep", "sbfl", "topDeep", "index", "message", "frames", "framesInWorkspace", "crashSite", "crashInTest", "valueOrigin", "truth", "truthModuleLevelOnly", "truthChangedInWindow", "truthOnStack", "ranks", "candidates", "top", "error"];
 
 async function rescore(r) {
   const [project, id] = r.bug.split(":");
@@ -38,7 +38,7 @@ async function rescore(r) {
   const env = envReason(r, fs.readFileSync(trace, "utf8"));
   if (env) { r.stage = "env-error"; r.envReason = env; }
   const k = r.ranks ?? {};
-  console.log(`${r.bug.padEnd(16)} commits=${String(r.index?.commitsInWindow ?? "?").padEnd(4)} blast=${k.blast}${k.blastDeep !== undefined ? ` deep=${k.blastDeep}` : ""} stack=${k.stack} sentry=${k.sentry} recent=${k.recent}${r.error ? " EVAL-ERROR" : ""}`);
+  console.log(`${r.bug.padEnd(16)} commits=${String(r.index?.commitsInWindow ?? "?").padEnd(4)} blast=${k.blast}${k.blastDeep !== undefined ? ` deep=${k.blastDeep}` : ""}${k.blastSbfl !== undefined ? ` sbfl=${k.blastSbfl}` : ""} stack=${k.stack} sentry=${k.sentry} recent=${k.recent}${r.error ? " EVAL-ERROR" : ""}`);
 }
 
 const queue = [...todo];

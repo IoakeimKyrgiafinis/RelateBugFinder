@@ -6,8 +6,10 @@ import { isIndexable, Workspace } from "./core/workspace";
 import { ago, blastRadius, codeLensInfo, traceSuspects } from "./core/analysis";
 import { parseStackTrace } from "./core/stackTrace";
 import { recordRun, runDeepTrace } from "./core/deepTrace";
+import { relatedTests, testCommandFor } from "./core/spectrum";
+import type { TraceResult } from "./core/types";
 import { startBridge } from "./mcp/bridge";
-import { BlastPanel, PanelMsg } from "./panel";
+import { BlastPanel, DeepInfo, PanelMsg } from "./panel";
 
 let ws: Workspace | undefined;
 let graph: CodeGraph | undefined;
@@ -122,6 +124,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
     if (m.type === "trace") return showTrace(ctx, m.text);
     if (m.type === "blast") return showBlast(ctx, m.target);
     if (m.type === "deepTrace") return deepTrace(ctx);
+    if (m.type === "compareTests") return compareTests(ctx);
     if (m.type === "askAi") {
       await vscode.env.clipboard.writeText(m.prompt);
       try {
@@ -259,11 +262,57 @@ Only continue if re-running it is safe (no deploys, payments or data changes).`,
     return;
   }
   const text = parseStackTrace(res.output).frames.length ? res.output.slice(-256 * 1024) : f.text;
-  const { result, functions } = await serial(() => {
+  const { result, functions, runId } = await serial(() => {
     const run = recordRun(graph!, root, res.records, { command: f.command, failed: res.exitCode !== 0 });
-    return { result: traceSuspects(graph!, root, text, cfg().get<number>("maxSuspects") ?? 10, { run: run.runId }), functions: run.functions };
+    return { result: traceSuspects(graph!, root, text, cfg().get<number>("maxSuspects") ?? 10, { run: run.runId }), functions: run.functions, runId: run.runId };
   });
-  BlastPanel.show(ctx.extensionUri, panelHandler, { mode: "trace", result, input: text, command: f.command, deep: { functions, seconds: Math.round((Date.now() - t0) / 100) / 10, exitCode: res.exitCode } });
+  const deep: DeepInfo = { functions, seconds: Math.round((Date.now() - t0) / 100) / 10, exitCode: res.exitCode, canCompare: !!testCommandFor(f.command, { file: "t.py", qualifiedName: "T.test" }) };
+  lastDeep = { runId, text, command: f.command, cwd: f.cwd, deep };
+  BlastPanel.show(ctx.extensionUri, panelHandler, { mode: "trace", result, input: text, command: f.command, deep });
+}
+
+/** The last deep trace, so its related passing tests can be compared against it. */
+let lastDeep: { runId: string; text: string; command: string; cwd?: string; deep: DeepInfo } | undefined;
+
+/**
+ * Spectrum-based localization: pick passing tests that exercise the code that ran just before the crash
+ * (relatedTests, from the call graph), re-run each with the recorder, store them in the failing run's
+ * session and re-rank with Ochiai. Asks first, listing the exact commands.
+ */
+async function compareTests(ctx: vscode.ExtensionContext) {
+  const d = lastDeep;
+  if (!d || !ready) return;
+  const show = (deep: DeepInfo, result?: TraceResult) =>
+    serial(() => result ?? traceSuspects(graph!, root, d.text, cfg().get<number>("maxSuspects") ?? 10, { run: d.runId })).then((r) =>
+      BlastPanel.show(ctx.extensionUri, panelHandler, { mode: "trace", result: r, input: d.text, command: d.command, deep })
+    );
+  const cmds = await serial(() => relatedTests(graph!, d.runId, 8).map((t) => testCommandFor(d.command, t)).filter((c): c is string => !!c));
+  if (!cmds.length) {
+    void vscode.window.showInformationMessage("No related tests found: no test function calls the code that ran just before the crash.");
+    return show({ ...d.deep, canCompare: false });
+  }
+  const go = await vscode.window.showWarningMessage(
+    `Blast Radius will run ${cmds.length} related test${cmds.length === 1 ? "" : "s"} with the recorder attached:\n\n${cmds.join("\n")}\n\nOnly continue if running your tests is safe.`,
+    { modal: true },
+    "Run related tests"
+  );
+  if (go !== "Run related tests") return show(d.deep);
+  const t0 = Date.now();
+  let passed = 0;
+  await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Blast Radius: related passing tests", cancellable: false }, async (p) => {
+    for (let i = 0; i < cmds.length; i++) {
+      p.report({ message: `${i + 1}/${cmds.length}`, increment: 100 / cmds.length });
+      const res = await runDeepTrace({ root, command: cmds[i], cwd: d.cwd, recorderDir: path.join(ctx.extensionPath, "python") });
+      // Only passing tests are a contrast; a failing or erroring one (often setup) is left out.
+      if (res.exitCode !== 0 || !res.records.length) continue;
+      passed++;
+      await serial(() => recordRun(graph!, root, res.records, { command: cmds[i], failed: false, session: d.runId }));
+    }
+  });
+  if (!passed) void vscode.window.showWarningMessage("None of the related tests passed with a recording, so the ranking is unchanged.");
+  const deep: DeepInfo = { ...d.deep, canCompare: false, spectrum: { tests: cmds.length, passed, seconds: Math.round((Date.now() - t0) / 100) / 10 } };
+  lastDeep = { ...d, deep };
+  return show(deep);
 }
 
 async function showBlast(ctx: vscode.ExtensionContext, target: string) {

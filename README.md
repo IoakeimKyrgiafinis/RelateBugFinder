@@ -49,7 +49,9 @@ Blast radius ("what breaks if I change this?") and MCP tools for agents are usef
  │ Python ast (stdlib)  │                  │ (:File)-[:DEFINES]->(:Function)           │
  │ git log -U0 -p       │                  │ (:Function)-[:CALLS]->(:Function)         │
  │ git diff HEAD -U0    │                  │ (:Commit)-[:MODIFIED]->(:File)            │
- └──────────────────────┘                  │ (:Commit)-[:TOUCHED]->(:Function) ◀ hunks │
+ │ field reads/writes   │                  │ (:Commit)-[:TOUCHED]->(:Function) ◀ hunks │
+ │ Deep trace recorder  │                  │ (:Function)-[:READS|WRITES]->(:Field)     │
+ └──────────────────────┘                  │ (:Run)-[:EXECUTED]->(:Function)           │
                                            └───────────────────────────────────────────┘
         ▲                                        ▲                 ▲
  terminal shell-integration           Webview panel + CodeLens   MCP server (stdio)
@@ -78,6 +80,8 @@ Blast radius ("what breaks if I change this?") and MCP tools for agents are usef
 |---|---|
 | **Auto-trace failed terminal commands** | With VS Code shell integration, when `npm test` / `pytest` / `node app.js` exits with a stack trace, a notification names the top suspect. One click opens the panel. |
 | **Where the undefined came from** | For `Cannot read properties of undefined/null`, Firefox/Safari equivalents and Python `'NoneType' object has no attribute …`, it reads the crash line, finds the expression that was empty (`coupon` in `coupon.pct`) and walks back to what produced it: a call (`const coupon = lookupCoupon(code)`, including destructuring and reassignment), a parameter the caller passed, a field, or an index lookup. The producing function becomes the top-weighted suspect. When a field was missing or empty (`'X' object has no attribute 'y'`, or the value came from `self.y` / `this.y`), the methods of that class that set `y` become suspects too. If no method sets it, the constructor does. That code already returned, so it is never on the stack. |
+| **Deep trace** (opt-in) | When the crash came from a terminal command, the panel offers to re-run it with a recorder attached (Python: `sys.setprofile` via `PYTHONPATH`, no install; Node: built-in `NODE_V8_COVERAGE`). Which of your functions ran, how often, and how close to the crash is stored as a `(:Run)` in Relate. Functions that ran just before the crash rank higher, and helpers that already returned (never on the stack) can join the suspects. It always asks first, showing the exact command. |
+| **Compare with related passing tests** (opt-in, Python) | After a deep trace, Cypher picks the test functions that call the code that ran just before the crash, runs them the same way (pytest or unittest) with the recorder, and stores them in the same session. Ochiai's spectrum score, computed in Cypher, then lowers functions that also run in passing tests. |
 | **Paste any trace** | `Blast Radius: Trace Error` (Ctrl/Cmd+Alt+T) uses the selection or clipboard. Parses Node/V8, Chrome/Firefox/Vite/webpack URLs, Python tracebacks, pytest, and `tsc` errors. Docker/CI paths are mapped by suffix. |
 | **Blast radius** | CodeLens above every function: `3 callers · 12 transitive · changed 3h ago`. Click it (or Ctrl/Cmd+Alt+B) for transitive callers, importing files and **which test files to run**. |
 | **MCP tools for agents** | `trace_error_suspects`, `get_blast_radius`, `find_recent_suspects`, `find_circular_dependencies`, and `query_codegraph` (read-only Cypher; writes are rejected and rolled back). |
@@ -147,7 +151,8 @@ npm test     # builds throwaway demos in your temp folder (never touches ./demo-
              #  · every MCP tool with VS Code closed, with assertions on the ranking and git history
              #  · that the standalone MCP server never locks the graph file
              #  · 19 "where did the undefined come from?" cases (TS/JS/Python, V8/Firefox/Safari wording)
-             #  · 14 "which field was missing?" cases (AttributeError wordings incl. mock.patch, self. / this. fields read on a line)
+             #  · 15 "which field was missing?" cases (AttributeError wordings incl. mock.patch, self. / this. fields read on a line, field reads/writes)
+             #  · Deep trace end to end (Node V8 coverage, Python recorder) and spectrum ranking against a related passing test
 ```
 
 Also verified by hand in real VS Code on Windows 11 (F5 → demo-shop → crash in the terminal → notification → panel).
@@ -167,7 +172,9 @@ Weights were chosen on a fixed half of the bugs (`bench/tune.mjs`). On the **oth
 
 | Method | Top 1 | Top 3 | MRR |
 |---|---|---|---|
-| **Blast Radius** | **31%** | **39%** | **0.35** |
+| **Blast Radius** (trace only, instant) | **31%** | **39%** | **0.35** |
+| **+ Deep trace** (one recorded re-run of the failing test) | **42%** | **56%** | **0.51** |
+| **+ related passing tests** (spectrum, after a deep trace) | **46%** | **56%** | **0.53** |
 | Read the stack top-down | 20% | 27% | 0.23 |
 | Stack frames, most recently changed first (Sentry-style) | 22% | 27% | 0.24 |
 | Most recently changed functions (ignores the trace) | 12% | 17% | 0.16 |
@@ -185,7 +192,17 @@ Where the gain comes from (all 114 bugs, full tables in [bench/RESULTS.md](bench
 
   These three rules were designed after looking at the off-stack failures in *both* halves of the benchmark. Their weights are fixed by principle (below the crash site), not tuned, but for these signals the held-out number is not fully blind.
 
-Reproduce: `node bench/bugsinpy.mjs --jobs 4` (needs `uv`; downloads the projects into `../bench-cache`; a few hours), then `node bench/report.mjs`. After changing the ranking, `node bench/rescore.mjs` re-scores in minutes without re-running any tests.
+**Deep trace** (`bench/deeptrace.mjs` re-runs each failing test with the same recorder the extension uses):
+* **Failing assertions:** #1 rises from 24% to 41% of bugs, top 3 from 27% to 53%. The stack stops in the test, but the recording shows which project functions the test actually exercised, and which ran last.
+* **Off-stack crashes:** 5 of 18 in the top 3, up from 3. These are functions that had already returned before the crash, so no stack-based method can see them.
+* **The cost:** the test runs once more (seconds for a single test). It is opt-in and always asks first.
+
+**Related passing tests** (spectrum-based fault localization):
+* Plain Ochiai made the ranking *worse* (held-out MRR 0.48 vs 0.51). With one failing test, the faulty function usually also runs in the passing tests; the bug needs a specific input.
+* What ships is the version chosen on the dev half: only tests that passed count, stack frames are not penalised, and the Ochiai score is softened (exponent 0.25).
+* On the held-out half that adds 2 more bugs at #1 (42% → 46%) and leaves the top 3 unchanged. It is a tie-breaker, not a big signal.
+
+Reproduce: `node bench/bugsinpy.mjs --jobs 4` (needs `uv`; downloads the projects into `../bench-cache`; a few hours), then `node bench/deeptrace.mjs` and `node bench/deeptrace.mjs --passing` (recordings), `node bench/rescore.mjs`, `node bench/tune.mjs` and `node bench/report.mjs`. After changing the ranking, `node bench/rescore.mjs` re-scores in minutes without re-running any tests.
 
 ## Packaging
 
@@ -209,7 +226,8 @@ code --install-extension dist-vsix/blast-radius-darwin-arm64.vsix
 **Relate capabilities used**
 - **Embedded Node.js engine** (`@relate/relate`): runs in the VS Code extension host, with no server.
 - **Single-file persistence** (`.vscode/codegraph.rl`) and `checkpoint()` after every update.
-- **Cypher:** `UNWIND`/`MERGE` batch upserts, variable-length paths (`[:CALLS*1..5]`, `[:IMPORTS*2..6]` for cycles), aggregation, list comprehensions, `CALL {}` subqueries, and indexes.
+- **Cypher:** `UNWIND`/`MERGE` batch upserts, variable-length paths (`[:CALLS*1..5]`, `[:IMPORTS*2..6]` for cycles), aggregation, list comprehensions, `CALL {}` subqueries, and indexes. Field data flow is a graph query (`(:Function)-[:WRITES]->(:Field)`), and spectrum-based fault localization (Ochiai over `(:Run)-[:EXECUTED]->(:Function)`) is a single aggregation query.
+- **Runs as data:** each deep trace and related test run is a `(:Run)` node linked to the functions that executed, so recorded executions and static structure are queried together.
 - **Transactions:** `begin`/`commit` for atomic re-indexing. `begin`/`rollback` plus statement-type checks make the agent's Cypher tool provably read-only.
 - **Agent access over MCP:** our own MCP server exposes graph-backed tools and raw read-only Cypher to Copilot, Claude Code and Cursor.
 

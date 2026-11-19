@@ -8,11 +8,22 @@ export type PanelMsg =
   | { type: "blast"; target: string }
   | { type: "askAi"; prompt: string }
   | { type: "deepTrace" }
+  | { type: "compareTests" }
   | { type: "ready" };
+
+export interface DeepInfo {
+  functions: number;
+  seconds: number;
+  exitCode: number | null;
+  /** True when the command is a pytest/unittest run, so related passing tests can be run the same way. */
+  canCompare?: boolean;
+  /** Set after "Compare with related passing tests". */
+  spectrum?: { tests: number; passed: number; seconds: number };
+}
 
 export type PanelState =
   | { mode: "welcome"; stats?: Record<string, unknown>; clipboard?: string }
-  | { mode: "trace"; result: TraceResult; input: string; command?: string; deep?: { functions: number; seconds: number; exitCode: number | null } }
+  | { mode: "trace"; result: TraceResult; input: string; command?: string; deep?: DeepInfo }
   | { mode: "blast"; result: BlastResult }
   | { mode: "error"; message: string };
 
@@ -119,7 +130,9 @@ function renderTrace(r, input, s) {
   if (r.note) h += '<div class="err">' + esc(r.note) + "</div>";
   if (!r.suspects.length) { app.innerHTML = h + '<p>No suspects: ' + esc(r.note || "no frames matched this workspace") + "</p>" + pasteBox(input); return bindPaste(); }
   if (r.crashSite) h += '<p class="muted">Thrown in <a data-f="' + esc(r.crashSite.file) + '" data-l="' + r.crashSite.line + '">' + esc(r.crashSite.file) + ":" + r.crashSite.line + "</a> · ranked by recency × graph distance</p>";
-  if (s && s.deep) h += '<div class="origin"><b>Deep trace</b><br>Re-ran <code>' + esc(s.command || "") + '</code> with recording (' + s.deep.seconds + ' s): ' + s.deep.functions + ' of your functions ran. Suspects that ran, especially just before the crash, now rank higher.</div>';
+  if (s && s.deep) h += '<div class="origin"><b>Deep trace</b><br>Re-ran <code>' + esc(s.command || "") + '</code> with recording (' + s.deep.seconds + ' s): ' + s.deep.functions + ' of your functions ran. Suspects that ran, especially just before the crash, now rank higher.' +
+    (s.deep.spectrum ? '<br><b>Compared with ' + s.deep.spectrum.tests + ' related passing test' + (s.deep.spectrum.tests === 1 ? "" : "s") + '</b> (' + s.deep.spectrum.passed + ' passed, ' + s.deep.spectrum.seconds + ' s): functions that also run in passing tests now rank lower (Ochiai spectrum score).'
+      : s.deep.canCompare ? '<div class="row" style="margin-top:6px"><button class="secondary" id="sbfl" title="Finds passing tests that exercise the same code (from the call graph), runs them with the recorder, and compares">Compare with related passing tests</button></div>' : "") + '</div>';
   else if (s && s.command) h += '<div class="row" style="margin:8px 0"><button class="secondary" id="deep" title="Runs the command again with a recorder attached, to see which functions actually ran before the crash">Deep trace: re-run <code>' + esc(s.command.length > 40 ? s.command.slice(0, 40) + "…" : s.command) + '</code> with recording</button></div>';
   if (r.valueOrigin) h += '<div class="origin"><b>Where the ' + esc(r.valueOrigin.value) + " came from</b><br>" + esc(r.valueOrigin.summary).replace(/\x60([^\x60]+)\x60/g, "<code>$1</code>") + "</div>";
   const max = Math.max(...r.suspects.map((s) => s.score), 1);
@@ -141,6 +154,8 @@ function renderTrace(r, input, s) {
   document.getElementById("ai").onclick = () => vscode.postMessage({ type: "askAi", prompt: aiPrompt(r) });
   const d = document.getElementById("deep");
   if (d) d.onclick = () => { d.disabled = true; d.textContent = "Re-running with recording…"; vscode.postMessage({ type: "deepTrace" }); };
+  const sb = document.getElementById("sbfl");
+  if (sb) sb.onclick = () => { sb.disabled = true; sb.textContent = "Running related passing tests…"; vscode.postMessage({ type: "compareTests" }); };
 }
 
 function aiPrompt(r) {

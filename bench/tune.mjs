@@ -26,7 +26,7 @@ for (const r of recs.values()) {
   const f = path.join(FEAT, `${r.bug.replace(":", "-")}.json`);
   if (!fs.existsSync(f)) continue;
   const d = JSON.parse(fs.readFileSync(f, "utf8"));
-  bugs.push({ bug: r.bug, dev: isDev(r.bug), deep: !!d.deep, assert: !r.message || /^AssertionError/.test(r.message), truth: new Set(d.truth), asOf: d.asOf, features: d.features ?? [] });
+  bugs.push({ bug: r.bug, dev: isDev(r.bug), deep: !!d.deep, sbfl: !!d.sbfl, assert: !r.message || /^AssertionError/.test(r.message), truth: new Set(d.truth), asOf: d.asOf, features: d.features ?? [] });
 }
 
 /** Mirrors traceSuspects' scoring (src/core/analysis.ts: recency, scoreOf, effectiveProx, warm rule). */
@@ -44,7 +44,8 @@ function rank(b, P) {
     const warm = rec > P.BASELINE || c.origin || c.field || !!ran;
     if (!(c.relation === "crash-site" || c.relation === "in-stack" || warm)) continue;
     let prox = c.prox;
-    if (ran === true) prox = Math.max(prox, P.RAN / (1 + c.since / P.SINCE_K));
+    const onStack = c.relation === "crash-site" || c.relation === "in-stack";
+    if (ran === true) prox = Math.max(prox, P.RAN / (1 + c.since / P.SINCE_K)) * (P.SBFL && b.sbfl && !(P.SBFL_OFFSTACK && onStack) ? Math.pow(c.ochiai ?? 0, P.SBFL_POW) : 1);
     else if (ran === false && c.relation !== "crash-site" && c.relation !== "in-stack") prox *= P.NOT_RAN;
     const pen = c.kind === "test" ? P.TEST_PENALTY : 1;
     scored.push({ id: c.id, s: Math.round(((prox * (P.FLOOR + rec)) / (P.FLOOR + P.DIRTY)) * pen * 1000) / 10 });
@@ -62,7 +63,7 @@ const metrics = (set, P) => {
 const better = (m, b) => m.mrr > b.mrr + 1e-9 || (Math.abs(m.mrr - b.mrr) < 1e-9 && m.top3 > b.top3);
 
 // As shipped in src/core/analysis.ts SCORING.
-export const SHIPPED = { HALF_LIFE_H: 336, DIRTY: 1, FN_COMMIT: 0.9, FILE_COMMIT: 0.15, BASELINE: 0.02, FLOOR: 0.3, TEST_PENALTY: 0.2, DEEP: false, RAN: 0.2, SINCE_K: 2, NOT_RAN: 1 };
+export const SHIPPED = { HALF_LIFE_H: 336, DIRTY: 1, FN_COMMIT: 0.9, FILE_COMMIT: 0.15, BASELINE: 0.02, FLOOR: 0.3, TEST_PENALTY: 0.2, DEEP: false, RAN: 0.2, SINCE_K: 2, NOT_RAN: 1, SBFL_POW: 0.25, SBFL_OFFSTACK: true };
 const dev = bugs.filter((b) => b.dev), held = bugs.filter((b) => !b.dev);
 
 let base = { P: SHIPPED, m: metrics(dev, SHIPPED) };
@@ -85,6 +86,16 @@ for (const RAN of [0.2, 0.3, 0.5, 0.7, 1])
       if (better(m, deep.m)) deep = { P, m };
     }
 
+// Spectrum (related passing tests): only the Ochiai exponent, deep weights held at the best found above.
+const sbflStart = { ...deep.P, SBFL: true, SBFL_POW: 1 };
+let sbfl = { P: sbflStart, m: metrics(dev, sbflStart) };
+for (const SBFL_OFFSTACK of [false, true])
+  for (const SBFL_POW of [0, 0.25, 0.5, 1, 2, 4]) {
+    const P = { ...deep.P, SBFL: true, SBFL_POW, SBFL_OFFSTACK };
+    const m = metrics(dev, P);
+    if (better(m, sbfl.m)) sbfl = { P, m };
+  }
+
 const fmt = (m) => `n=${String(m.n).padStart(3)}  top1 ${(100 * m.top1).toFixed(0).padStart(3)}%  top3 ${(100 * m.top3).toFixed(0).padStart(3)}%  top5 ${(100 * m.top5).toFixed(0).padStart(3)}%  MRR ${m.mrr.toFixed(3)}`;
 const show = (label, P) => {
   console.log(`\n${label}: ${JSON.stringify(P)}`);
@@ -95,6 +106,13 @@ show("Shipped, no deep trace", SHIPPED);
 show("Best base weights on dev (no deep trace)", base.P);
 show("Shipped + deep trace", deepStart);
 show("Best deep-trace weights on dev", deep.P);
+console.log(`\n${bugs.filter((b) => b.sbfl).length} bugs with related passing tests recorded`);
+show("Deep trace + passing tests, SBFL_POW=1", sbflStart);
+show("Best SBFL_POW on dev", sbfl.P);
+for (const SBFL_OFFSTACK of [false, true]) for (const SBFL_POW of [0.5, 1, 2]) {
+  const P = { ...deep.P, SBFL: true, SBFL_POW, SBFL_OFFSTACK };
+  console.log(`  POW=${SBFL_POW}${SBFL_OFFSTACK ? " offstack" : ""}`.padEnd(18), "dev", fmt(metrics(dev, P)), "| held", fmt(metrics(held, P)));
+}
 for (const [k, vs] of Object.entries({ RAN: [0.3, 0.7], SINCE_K: [5, 50], NOT_RAN: [0.1, 1] })) for (const v of vs) {
   const P = { ...deep.P, [k]: v };
   console.log(`  ${k}=${v}`.padEnd(16), "dev", fmt(metrics(dev, P)), "| held", fmt(metrics(held, P)));

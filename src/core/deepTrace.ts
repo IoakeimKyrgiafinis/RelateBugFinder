@@ -2,7 +2,9 @@
  * Deep trace: re-run the command that failed with a recorder attached, and store which functions of the
  * project actually ran in the graph:
  *
- *   (:Run {id, command, failed, ts, lang})-[:EXECUTED {count, since}]->(:Function)
+ *   (:Run {id, command, failed, ts, lang, session})-[:EXECUTED {count, since}]->(:Function)
+ *
+ * Passing runs recorded to compare with a failing one carry `session` = the failing run's id (spectrum.ts).
  *
  * `since` = how many calls to the project's functions happened after this one's last call (0 = it was the
  * last function to run, i.e. right next to the crash). Functions that already returned never show up in a stack
@@ -123,7 +125,7 @@ function lineAt(starts: number[], offset: number): number {
  * Store a run in the graph and return its id. Each record maps to the innermost indexed function whose
  * lines contain its first line (lambdas and comprehensions count for their enclosing function).
  */
-export function recordRun(g: CodeGraph, root: string, records: ExecRecord[], meta: { command: string; failed: boolean; lang?: string }): { runId: string; functions: number } {
+export function recordRun(g: CodeGraph, root: string, records: ExecRecord[], meta: { command: string; failed: boolean; lang?: string; session?: string }): { runId: string; functions: number } {
   const rootN = path.resolve(root);
   const byFile = new Map<string, ExecRecord[]>();
   for (const r of records) {
@@ -150,12 +152,12 @@ export function recordRun(g: CodeGraph, root: string, records: ExecRecord[], met
   const ts = Math.floor(nowSec());
   const runId = `run-${ts}-${Math.random().toString(36).slice(2, 8)}`;
   g.txn(() => {
-    g.q("CREATE (:Run {id:$id, command:$command, failed:$failed, ts:$ts, lang:$lang})", { id: runId, command: meta.command, failed: meta.failed, ts, lang: meta.lang ?? "python" });
+    g.q("CREATE (:Run {id:$id, command:$command, failed:$failed, ts:$ts, lang:$lang, session:$session})", { id: runId, command: meta.command, failed: meta.failed, ts, lang: meta.lang ?? "python", session: meta.session ?? null });
     const rows = [...agg].map(([id, v]) => ({ id, count: v.count, since: v.since }));
     for (let i = 0; i < rows.length; i += 2000)
       g.q("MATCH (r:Run {id:$run}) UNWIND $rows AS x MATCH (f:Function {id:x.id}) CREATE (r)-[:EXECUTED {count:x.count, since:x.since}]->(f)", { run: runId, rows: rows.slice(i, i + 2000) });
-    // Keep the graph small: the 50 most recent runs.
-    g.q("MATCH (r:Run) WITH r ORDER BY r.ts DESC SKIP 50 DETACH DELETE r");
+    // Keep the graph small: the 300 most recent runs.
+    g.q("MATCH (r:Run) WITH r ORDER BY r.ts DESC SKIP 300 DETACH DELETE r");
   });
   return { runId, functions: agg.size };
 }

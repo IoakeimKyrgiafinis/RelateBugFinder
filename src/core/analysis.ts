@@ -4,6 +4,7 @@ import { BlastNode, BlastResult, Suspect, SuspectReason, TraceResult } from "./t
 import { findValueOrigin, parseNullishError } from "./valueOrigin";
 import { nowSec } from "./clock";
 import { executedIn } from "./deepTrace";
+import { ochiai } from "./spectrum";
 
 /**
  * Suspect score = proximity × (0.3 + recency) / 1.3, × 0.2 for test code, shown as 0–100.
@@ -28,7 +29,7 @@ import { executedIn } from "./deepTrace";
  *   (0.4 / 0.3 links sit below the crash site; they lead mostly when the stack ends inside a test.)
  */
 // Weights picked on the DEV half of the BugsInPy benchmark only (bench/tune.mjs); see bench/RESULTS.md.
-export const SCORING = { HALF_LIFE_H: 336, DIRTY: 1.0, FN_COMMIT: 0.9, FILE_COMMIT: 0.15, BASELINE: 0.02, FLOOR: 0.3, TEST_PENALTY: 0.2, UP_HOPS: 5, DOWN_HOPS: 2, SIBLING: 0.4, ORIGIN: 1.0, FIELD_WRITER: 0.6, FIELD_INIT: 0.5, FIELD_READ: 0.4, MEMBER: 0.3, RAN: 0.2, SINCE_K: 2, NOT_RAN: 1 };
+export const SCORING = { HALF_LIFE_H: 336, DIRTY: 1.0, FN_COMMIT: 0.9, FILE_COMMIT: 0.15, BASELINE: 0.02, FLOOR: 0.3, TEST_PENALTY: 0.2, UP_HOPS: 5, DOWN_HOPS: 2, SIBLING: 0.4, ORIGIN: 1.0, FIELD_WRITER: 0.6, FIELD_INIT: 0.5, FIELD_READ: 0.4, MEMBER: 0.3, RAN: 0.2, SINCE_K: 2, NOT_RAN: 1, SBFL_POW: 0.25 };
 
 const now = nowSec;
 const decay = (ts: number) => Math.pow(0.5, Math.max(0, now() - ts) / 3600 / SCORING.HALF_LIFE_H);
@@ -59,7 +60,7 @@ export function functionAtLine(g: CodeGraph, file: string, line: number): FnRow 
 // ------------------------------------------------------------------ trace
 
 /** Raw per-candidate signals, so the benchmark can re-weight scores offline without re-indexing. */
-export interface CandidateFeatures { id: string; relation: Suspect["relation"]; prox: number; kind: FileKind; dirty: boolean; fnTs: number | null; fileTs: number | null; origin: boolean; field: boolean; ran: boolean | null; since: number | null }
+export interface CandidateFeatures { id: string; relation: Suspect["relation"]; prox: number; kind: FileKind; dirty: boolean; fnTs: number | null; fileTs: number | null; origin: boolean; field: boolean; ran: boolean | null; since: number | null; ochiai?: number | null }
 
 export function traceSuspects(g: CodeGraph, root: string, traceText: string, limit = 12, opts: { features?: boolean; run?: string } = {}): TraceResult & { features?: CandidateFeatures[] } {
   const features: CandidateFeatures[] = [];
@@ -207,6 +208,9 @@ export function traceSuspects(g: CodeGraph, root: string, traceText: string, lim
   // Functions that ran join the candidates, weighted by how close to the crash they last ran;
   // (NOT_RAN can push down neighbours that never ran; the benchmark found no gain from it, so it is 1.)
   const executed = opts.run ? executedIn(g, opts.run) : undefined;
+  // Passing runs in the same session → Ochiai suspiciousness (runs everywhere = less suspicious).
+  const spectrum = opts.run ? ochiai(g, opts.run) : undefined;
+  const sb = spectrum && spectrum.passed > 0 ? spectrum.scores : undefined;
   if (executed) {
     const fresh = [...executed.keys()].filter((id) => !cand.has(id));
     for (let i = 0; i < fresh.length; i += 2000) {
@@ -219,6 +223,8 @@ export function traceSuspects(g: CodeGraph, root: string, traceText: string, lim
     for (const [id, c] of cand) {
       const e = executed.get(id);
       if (e) c.reasons.push({ kind: "ran", text: `Ran in the deep trace (${e.count} call${e.count > 1 ? "s" : ""}${e.since <= 5 ? ", among the last to run before the crash" : ""})` });
+      const o = sb?.get(id);
+      if (e && o) c.reasons.push({ kind: "ran", text: o.ep === 0 ? `Ran in none of the ${spectrum!.passed} related passing tests` : `Also ran in ${o.ep} of ${spectrum!.passed} related passing tests` });
     }
   }
 
@@ -264,9 +270,10 @@ export function traceSuspects(g: CodeGraph, root: string, traceText: string, lim
     }
     const kind = fileKind(c.fn.file);
     const ex = executed ? executed.get(c.fn.id) ?? null : undefined;
-    const score = scoreOf({ prox: effectiveProx(c.prox, c.relation, ex), recency, kind });
+    const och = sb ? sb.get(c.fn.id)?.ochiai ?? null : undefined;
+    const score = scoreOf({ prox: effectiveProx(c.prox, c.relation, ex, och), recency, kind });
     const warm = recency > SCORING.BASELINE || c.reasons.some((x) => x.kind === "value-origin" || x.kind === "field") || !!ex;
-    if (opts.features) features.push({ id: c.fn.id, relation: c.relation, prox: c.prox, kind, dirty: !!r.dirty, fnTs: commits[0]?.ts ?? null, fileTs: fileCommits[0]?.ts ?? null, origin: c.reasons.some((x) => x.kind === "value-origin"), field: c.reasons.some((x) => x.kind === "field"), ran: ex === undefined ? null : !!ex, since: ex ? ex.since : null });
+    if (opts.features) features.push({ id: c.fn.id, relation: c.relation, prox: c.prox, kind, dirty: !!r.dirty, fnTs: commits[0]?.ts ?? null, fileTs: fileCommits[0]?.ts ?? null, origin: c.reasons.some((x) => x.kind === "value-origin"), field: c.reasons.some((x) => x.kind === "field"), ran: ex === undefined ? null : !!ex, since: ex ? ex.since : null, ochiai: och === undefined ? undefined : och });
     suspects.push({ ...c.fn, score: Math.round(score * 1000) / 10, hops: c.hops, relation: c.relation, reasons: c.reasons, lastChange, warm } as Suspect & { warm: boolean });
   }
 
@@ -356,9 +363,13 @@ function fieldsReadAt(g: CodeGraph, fnId: string, line: number): { cls: string; 
  * Ran → at least RAN / (1 + since / SINCE_K), where `since` counts project calls after its last call.
  * Did not run → × NOT_RAN, except stack frames (they obviously ran; a mapping miss shouldn't sink them).
  */
-export function effectiveProx(prox: number, relation: Suspect["relation"], ex: { since: number } | null | undefined): number {
+export function effectiveProx(prox: number, relation: Suspect["relation"], ex: { since: number } | null | undefined, och?: number | null): number {
   if (ex === undefined) return prox;
-  if (ex) return Math.max(prox, SCORING.RAN / (1 + ex.since / SCORING.SINCE_K));
+  // With passing runs to compare, scale by Ochiai: ran in the failing run only → 1; ran everywhere → small.
+  // Not for stack frames: they run in most related tests too, and the stack already vouches for them.
+  const onStack = relation === "crash-site" || relation === "in-stack";
+  const sbf = och === undefined || onStack ? 1 : Math.pow(och ?? 0, SCORING.SBFL_POW);
+  if (ex) return Math.max(prox, SCORING.RAN / (1 + ex.since / SCORING.SINCE_K)) * sbf;
   if (relation === "crash-site" || relation === "in-stack") return prox;
   return prox * SCORING.NOT_RAN;
 }

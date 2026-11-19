@@ -56,6 +56,20 @@ async function main() {
   const run = records.length ? recordRun(g, root, records, { command: "bench", failed: true }) : undefined;
   const rd = run ? traceSuspects(g, root, trace, 500, { features: !!featuresFile, run: run.runId }) : undefined;
   const blastDeep = rd?.suspects.map((s) => s.id);
+  // Then spectrum-based: add the related passing tests' recordings (bench/deeptrace.mjs --passing) to the same session.
+  const passingFile = deepDir ? path.join(deepDir, "passing.json") : "";
+  const passing: { command: string; dir: string; exitCode: number | null }[] = run && fs.existsSync(passingFile) ? JSON.parse(fs.readFileSync(passingFile, "utf8")) : [];
+  let passRuns = 0;
+  for (const p of passing) {
+    // Only tests that passed are a contrast; one that failed or errored (often the environment) is skipped.
+    if (p.exitCode !== 0) continue;
+    const recs = readRecords(path.join(deepDir, p.dir));
+    if (!recs.length) continue;
+    recordRun(g, root, recs, { command: p.command, failed: p.exitCode !== 0, session: run!.runId });
+    passRuns++;
+  }
+  const rs = passRuns ? traceSuspects(g, root, trace, 500, { features: !!featuresFile, run: run!.runId }) : undefined;
+  const blastSbfl = rs?.suspects.map((s) => s.id);
 
   const stack: string[] = [];
   for (const f of r.frames) {
@@ -76,7 +90,7 @@ async function main() {
     return i < 0 ? null : i + 1;
   };
   const top = r.suspects.slice(0, 5).map((s) => ({ id: s.id, score: s.score, why: s.reasons.map((x) => x.text) }));
-  if (featuresFile) fs.writeFileSync(featuresFile, JSON.stringify({ asOf, truth: [...truth], stack, features: (rd ?? r).features, deep: !!rd }));
+  if (featuresFile) fs.writeFileSync(featuresFile, JSON.stringify({ asOf, truth: [...truth], stack, features: (rs ?? rd ?? r).features, deep: !!rd, sbfl: !!rs }));
   const truthTouched = [...truth].some((id) => lastTouch.has(id) || dirty.has(id));
 
   console.log(
@@ -92,8 +106,9 @@ async function main() {
       truthModuleLevelOnly: truth.size === 0 && moduleOnly,
       truthChangedInWindow: truthTouched,
       truthOnStack: [...truth].some((id) => stack.includes(id)),
-      ranks: { blast: rankOf(blast), blastDeep: blastDeep ? rankOf(blastDeep) : undefined, stack: rankOf(stack), sentry: rankOf(sentry), recent: rankOf(recent) },
+      ranks: { blast: rankOf(blast), blastDeep: blastDeep ? rankOf(blastDeep) : undefined, blastSbfl: blastSbfl ? rankOf(blastSbfl) : undefined, stack: rankOf(stack), sentry: rankOf(sentry), recent: rankOf(recent) },
       deep: run ? { functionsRan: run.functions, truthRan: [...truth].some((id) => records.length > 0 && rd!.suspects.some((s) => s.id === id && s.reasons.some((x) => x.kind === "ran"))) } : undefined,
+      sbfl: rs ? { passingRuns: passRuns } : undefined,
       topDeep: rd?.suspects.slice(0, 5).map((s) => ({ id: s.id, score: s.score, why: s.reasons.map((x) => x.text) })),
       candidates: { blast: blast.length, stack: stack.length },
       top,
