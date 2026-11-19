@@ -2,8 +2,9 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import fs from "fs";
+import { fileURLToPath } from "url";
 const [root, traceFile] = process.argv.slice(2);
-const transport = new StdioClientTransport({ command: "node", args: [new URL("../dist/mcp.js", import.meta.url).pathname, "--root", root], stderr: "inherit" });
+const transport = new StdioClientTransport({ command: "node", args: [fileURLToPath(new URL("../dist/mcp.js", import.meta.url)), "--root", root], stderr: "inherit" });
 const client = new Client({ name: "e2e", version: "1" });
 await client.connect(transport);
 const { tools } = await client.listTools();

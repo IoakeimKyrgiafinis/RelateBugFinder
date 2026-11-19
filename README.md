@@ -88,7 +88,7 @@ Relate allows **one writer per `.rl` file**, and the extension holds it. The MCP
 git clone https://github.com/YOUR_USER/blast-radius && cd blast-radius
 npm install && npm run build
 npm run demo            # creates ./demo-shop with a bug hidden in git history
-code .                  # press F5 → "Extension Development Host", then File ▸ Open Folder ▸ demo-shop
+code .                  # press F5: a new VS Code window opens on demo-shop with the extension loaded
 ```
 
 **Then, in demo-shop:**

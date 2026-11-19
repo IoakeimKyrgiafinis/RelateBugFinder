@@ -5,7 +5,7 @@
  *   node dist/mcp.js --root /path/to/workspace
  *
  * Fast path: forwards each tool call to the running VS Code extension, which owns the live graph.
- * Fallback (VS Code closed): opens `.vscode/codegraph.rl` itself, indexing the workspace first if needed.
+ * Fallback (VS Code closed): opens `.vscode/codegraph.rl` itself and re-indexes the workspace first.
  */
 import * as fs from "fs";
 import * as path from "path";
@@ -59,16 +59,13 @@ async function viaLocal(name: string, args: Record<string, unknown>): Promise<un
   if (!local) {
     const file = path.join(ROOT, ".vscode", "codegraph.rl");
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    const fresh = !fs.existsSync(file);
     local = CodeGraph.open(file);
     const ws = new Workspace(ROOT, local, { pythonScript: path.join(__dirname, "..", "python", "py_index.py"), log });
-    if (fresh || process.argv.includes("--reindex")) {
-      log(`indexing ${ROOT} …`);
-      const s = await ws.fullIndex();
-      log(`indexed ${s.files} files, ${s.functions} functions, ${s.calls} calls in ${s.ms}ms`);
-    } else {
-      await ws.refreshGit(false).catch(() => undefined);
-    }
+    // Always re-index: code may have changed while VS Code was closed, and the git layer can only be
+    // linked to functions the Workspace has parsed (a bare refreshGit on an empty Workspace would wipe it).
+    log(`indexing ${ROOT} …`);
+    const s = await ws.fullIndex();
+    log(`indexed ${s.files} files, ${s.functions} functions, ${s.calls} calls in ${s.ms}ms`);
   }
   return callTool(local, ROOT, name, args);
 }

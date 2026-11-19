@@ -123,7 +123,7 @@ const ok = (m) => console.log("  ✓ " + m);
 
   // Panel → open file message
   await panel.webview.recv({ type: "open", file: "src/coupons.ts", line: 10 });
-  assert.ok(messages.find((m) => m[0] === "open" && m[1].endsWith("src/coupons.ts")));
+  assert.ok(messages.find((m) => m[0] === "open" && m[1].split(path.sep).join("/").endsWith("src/coupons.ts")));
   ok("panel click opens src/coupons.ts:10");
 
   // Terminal link provider

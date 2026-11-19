@@ -345,6 +345,8 @@ export class Workspace {
   /** Refresh commit history when HEAD moved (or forced), and dirty ranges always. Returns commit count when refreshed. */
   async refreshGit(force: boolean): Promise<number> {
     if (!(await isGitRepo(this.root))) return 0;
+    // Nothing parsed yet → we can't link commits to functions; rebuilding now would wipe the git layer.
+    if (this.files.size === 0) return 0;
     const head = await headHash(this.root);
     const fnsByFile = new Map([...this.files.values()].map((pf) => [pf.path, pf.functions]));
     const dirty = await dirtyRanges(this.root);
