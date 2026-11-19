@@ -87,7 +87,7 @@ export function callTool(g: CodeGraph, root: string, name: string, args: Record<
         })).map((s, i) => ({ ...s, rank: i + 1 })),
         callEdges: r.edges,
         frames: r.frames.map((f) => `${f.relPath ?? f.file}:${f.line}${f.fn ? ` (${f.fn})` : ""}${f.relPath ? "" : " [outside workspace]"}`),
-        scoring: `score = recency × proximity (half-life ${SCORING.HALF_LIFE_H}h; uncommitted=1.0)`,
+        scoring: `score = proximity × (${SCORING.FLOOR} + recency), ×${SCORING.TEST_PENALTY} for tests (half-life ${SCORING.HALF_LIFE_H / 24}d; uncommitted=1.0)`,
       };
     }
     case "get_blast_radius":

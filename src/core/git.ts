@@ -61,10 +61,19 @@ export async function recentCommits(root: string, sinceDays = 30, max = 400): Pr
   let out: string;
   try {
     const until = nowSec();
-    out = await git(root, [
-      "log", `--since=@${Math.floor(until - sinceDays * 86400)}`, ...(isPinned() ? [`--until=@${Math.floor(until)}`] : []), `--max-count=${max}`, "--no-color", "--no-renames", "--relative",
+    const since = Math.floor(until - sinceDays * 86400);
+    const args = (sinceFlag: string) => [
+      "log", `${sinceFlag}=@${since}`, ...(isPinned() ? [`--until=@${Math.floor(until)}`] : []), `--max-count=${max}`, "--no-color", "--no-renames", "--relative",
       "-U0", "-p", `--format=${RS}%H${US}%an${US}%at${US}%s`,
-    ]);
+    ];
+    // Plain --since stops walking at the first commit older than the cutoff, so one out-of-order date
+    // (a rebase, cherry-pick or backdated commit on top) hides all recent history. --since-as-filter
+    // (git >= 2.37) checks every commit instead; older git falls back to --since.
+    try {
+      out = await git(root, args("--since-as-filter"));
+    } catch {
+      out = await git(root, args("--since"));
+    }
   } catch {
     return []; // no commits yet
   }

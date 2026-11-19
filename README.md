@@ -61,14 +61,14 @@ Blast radius ("what breaks if I change this?") and MCP tools for agents are usef
 * **Suspect scoring is plain Cypher plus an explainable formula** (see `src/core/analysis.ts`):
 
   ```
-  score = recency × proximity
-  recency   = 1.0 uncommitted | 0.9·½^(age/72h) function changed | 0.35·½^(age/72h) only file changed | 0.02
+  score = proximity × (0.3 + recency) / 1.3, × 0.2 if the function is test code
+  recency   = 1.0 uncommitted | 0.9·½^(age/14d) function changed | 0.15·½^(age/14d) only file changed | 0.02
   proximity = 1.0 crash site | 1/(1+0.5·i) i-th stack frame | 1/(1+hops) caller ≤5 hops up
             | 0.8/(1+hops) callee of the crash site ≤2 hops down | 0.4 × frame proximity for a direct callee of another frame
             | 1.0 the call that produced the undefined/null value | 0.9 the caller that passed it as an argument
   ```
 
-  Every suspect ships with human-readable reasons, so the ranking is never a black box.
+  Every suspect ships with human-readable reasons, so the ranking is never a black box. The weights were tuned on half of a real-bug benchmark and checked on the other half (below).
 
 ## Features
 
@@ -150,6 +150,27 @@ npm test     # builds throwaway demos in your temp folder (never touches ./demo-
 Also verified by hand in real VS Code on Windows 11 (F5 → demo-shop → crash in the terminal → notification → panel).
 
 Measured here: zod (525 files / 3,030 functions / 3,255 call edges) fully indexes in 2.9 s. psf/requests (37 files / 711 functions) in 0.5 s. Graph queries take 1–30 ms.
+
+## Benchmark on real bugs
+
+[BugsInPy](https://github.com/soarsmu/BugsInPy) is a published set of real bugs from real Python projects. `bench/bugsinpy.mjs` checks out each buggy commit with its real git history, runs the test that exposes the bug, and asks each method where the fix belongs, with the clock pinned to when the bug was hit. 229 bugs from 12 projects were attempted; 140 reproduced on Windows 11 / Python 3.8 and have a function to point at. Ground truth is the function(s) the real fix changed.
+
+Weights were chosen on a fixed half of the bugs (`bench/tune.mjs`). On the **other half**, never used for tuning (n = 70):
+
+| Method | Top 1 | Top 3 | MRR |
+|---|---|---|---|
+| **Blast Radius** | **27%** | **33%** | **0.30** |
+| Read the stack top-down | 17% | 23% | 0.20 |
+| Stack frames, most recently changed first (Sentry-style) | 19% | 23% | 0.20 |
+| Most recently changed functions (ignores the trace) | 11% | 17% | 0.16 |
+
+Where the gain comes from (all 140 bugs, full tables in [bench/RESULTS.md](bench/RESULTS.md)):
+
+* **Failing assertions** (a test's `assert` fails, n = 68): the right function is #1 in 25% of bugs, vs 4% for reading the stack. The stack ends in the test, so the useful suspects are the code the test called that changed recently.
+* **Crashes** (n = 72): about the same as reading the stack (top 1: 29% vs 26%). The stack is already a strong signal here.
+* **Crashes fixed somewhere off the stack** (n = 46): nobody does well. Blast Radius gets 1 into the top 3, and "most recently changed" gets 5. In these real fixes the faulty value usually travels through object fields or several calls, which value tracing doesn't follow yet. The demo's case (a helper that returned undefined straight into the crash line) is handled, but it isn't the common case in this dataset.
+
+Reproduce: `node bench/bugsinpy.mjs --jobs 4` (needs `uv`; downloads the projects into `../bench-cache`; a few hours), then `node bench/report.mjs`. After changing the ranking, `node bench/rescore.mjs` re-scores in minutes without re-running any tests.
 
 ## Packaging
 

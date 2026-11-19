@@ -53,12 +53,14 @@ Every developer hits this several times a day: something broke, and the stack tr
 - **Relate's single-writer lock:** a second process can't open the graph file, even read-only, while the extension holds it. That forced the bridge design above, which turned out better.
 - **A lock that never lets go:** Relate releases a file's writer lock only when the process exits. Our first standalone MCP server opened the graph file, so a long agent session silently stopped VS Code's extension from starting. It now indexes into an in-memory graph, and a test checks the file stays openable while the server runs.
 - **TypeScript 7:** npm's latest TypeScript is the Go-native compiler and no longer exposes the JS compiler API, so we pinned 5.9.
+- **A git flag that silently drops history:** `git log --since` stops walking at the first commit older than the cutoff, so one out-of-order date (a rebase, cherry-pick or backdated commit) hid all recent changes. The benchmark caught it: 143 of 144 bugs saw zero commits. We now use `--since-as-filter`.
 - **Lost line numbers:** git hunks use each commit's own line numbering, which drifts. We map older commits approximately and let recency weighting absorb the error.
 
 ## Accomplishments
 
 - **It works on real code:** zod (525 files, 3,030 functions, 3,255 call edges) fully indexes in 2.9 s. Graph queries take 1–30 ms.
 - **Tested end to end:** `npm test` runs the real built extension against a mocked VS Code API (terminal auto-trace, panel, CodeLens, incremental re-indexing, git-commit refresh, MCP through the live bridge), plus every MCP tool with VS Code closed. It's also been run by hand in real VS Code on Windows 11.
+- **Measured on real bugs:** on BugsInPy (140 reproduced bugs from 12 Python projects), with weights tuned on one half and tested on the other, Blast Radius puts the truly fixed function first in 27% of held-out bugs, against 17–19% for reading the stack or Sentry-style ordering (MRR 0.30 vs 0.20). The biggest gain is on failing assertions: 25% vs 4%. We also publish where it doesn't help yet: crashes fixed far off the stack.
 - **Honest about prior art:** Sentry's Suspect Commits and several code-graph MCP servers cover parts of this. Ours is the combination that ranks suspects that aren't on the stack (see the README's comparison table).
 
 ## What's next

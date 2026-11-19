@@ -5,12 +5,15 @@ import { findValueOrigin, parseNullishError } from "./valueOrigin";
 import { nowSec } from "./clock";
 
 /**
- * Suspect score = recency × proximity, both in [0,1]. Deliberately simple and explainable:
+ * Suspect score = proximity × (0.3 + recency) / 1.3, × 0.2 for test code, shown as 0–100.
+ * Deliberately simple and explainable:
  *
  *   recency   1.0                       uncommitted edits inside the function
- *             0.9 · ½^(age / 72h)       a commit's diff hunk overlaps the function
- *             0.35 · ½^(age / 72h)      only the *file* changed (function untouched)
- *             0.02                      nothing changed recently (still shown if on the stack)
+ *             0.9 · ½^(age / 14d)       a commit's diff hunk overlaps the function
+ *             0.15 · ½^(age / 14d)      only the *file* changed (function untouched)
+ *             0.02                      nothing changed recently
+ *   floor     0.3                       so a cold crash site still beats a warm but distant neighbour
+ *   tests     × 0.2                     kept (they explain the failure) but a fix is rarely in the test
  *   proximity 1.0                       crash site (top in-workspace frame)
  *             1 / (1 + 0.5·i)           i-th frame further down the stack
  *             1 / (1 + hops)            static caller N hops upstream (max 5)
@@ -19,7 +22,8 @@ import { nowSec } from "./clock";
  *             1.0                       the call that produced the undefined/null value read at the crash site
  *             0.9                       the caller that passed an undefined/null argument (see valueOrigin.ts)
  */
-export const SCORING = { HALF_LIFE_H: 72, DIRTY: 1.0, FN_COMMIT: 0.9, FILE_COMMIT: 0.35, BASELINE: 0.02, UP_HOPS: 5, DOWN_HOPS: 2, SIBLING: 0.4, ORIGIN: 1.0 };
+// Weights picked on the DEV half of the BugsInPy benchmark only (bench/tune.mjs); see bench/RESULTS.md.
+export const SCORING = { HALF_LIFE_H: 336, DIRTY: 1.0, FN_COMMIT: 0.9, FILE_COMMIT: 0.15, BASELINE: 0.02, FLOOR: 0.3, TEST_PENALTY: 0.2, UP_HOPS: 5, DOWN_HOPS: 2, SIBLING: 0.4, ORIGIN: 1.0 };
 
 const now = nowSec;
 const decay = (ts: number) => Math.pow(0.5, Math.max(0, now() - ts) / 3600 / SCORING.HALF_LIFE_H);
@@ -49,7 +53,11 @@ export function functionAtLine(g: CodeGraph, file: string, line: number): FnRow 
 
 // ------------------------------------------------------------------ trace
 
-export function traceSuspects(g: CodeGraph, root: string, traceText: string, limit = 12): TraceResult {
+/** Raw per-candidate signals, so the benchmark can re-weight scores offline without re-indexing. */
+export interface CandidateFeatures { id: string; relation: Suspect["relation"]; prox: number; kind: FileKind; dirty: boolean; fnTs: number | null; fileTs: number | null; origin: boolean }
+
+export function traceSuspects(g: CodeGraph, root: string, traceText: string, limit = 12, opts: { features?: boolean } = {}): TraceResult & { features?: CandidateFeatures[] } {
+  const features: CandidateFeatures[] = [];
   const parsed = parseStackTrace(traceText);
   const files = indexedFiles(g);
   for (const f of parsed.frames) f.relPath = mapToWorkspace(f.file, root, files);
@@ -187,13 +195,17 @@ export function traceSuspects(g: CodeGraph, root: string, traceText: string, lim
       recency = Math.max(recency, SCORING.FILE_COMMIT * decay(top.ts));
       c.reasons.push({ kind: "file-commit", text: `File (not this function) changed ${ago(top.ts)} in ${top.hash.slice(0, 7)}` });
     }
-    const score = recency * c.prox;
-    suspects.push({ ...c.fn, score: Math.round(score * 1000) / 10, hops: c.hops, relation: c.relation, reasons: c.reasons, lastChange });
+    const kind = fileKind(c.fn.file);
+    const score = scoreOf({ prox: c.prox, recency, kind });
+    const warm = recency > SCORING.BASELINE || c.reasons.some((x) => x.kind === "value-origin");
+    if (opts.features) features.push({ id: c.fn.id, relation: c.relation, prox: c.prox, kind, dirty: !!r.dirty, fnTs: commits[0]?.ts ?? null, fileTs: fileCommits[0]?.ts ?? null, origin: c.reasons.some((x) => x.kind === "value-origin") });
+    suspects.push({ ...c.fn, score: Math.round(score * 1000) / 10, hops: c.hops, relation: c.relation, reasons: c.reasons, lastChange, warm } as Suspect & { warm: boolean });
   }
 
-  // Keep stack frames even when cold; drop cold static neighbours.
-  const ranked = suspects
-    .filter((s) => s.relation === "crash-site" || s.relation === "in-stack" || s.score > SCORING.BASELINE * 100 / 2 + 0.5)
+  // Keep stack frames even when cold; drop static neighbours with no recent change and no value-origin link.
+  const ranked = (suspects as (Suspect & { warm: boolean })[])
+    .filter((s) => s.relation === "crash-site" || s.relation === "in-stack" || s.warm)
+    .map(({ warm: _w, ...s }) => s as Suspect)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
   const keep = ranked.map((s) => s.id);
@@ -205,7 +217,19 @@ export function traceSuspects(g: CodeGraph, root: string, traceText: string, lim
     edges,
     note: parsed.message,
     valueOrigin,
+    ...(opts.features ? { features } : {}),
   };
+}
+
+export type FileKind = "src" | "test";
+export const fileKind = (file: string): FileKind => (TEST_FILE_RE.test(file) ? "test" : "src");
+
+/**
+ * The final score in [0,1]. `recency` is already max(baseline, dirty, function commit, file commit).
+ * Tests stay in the list (they explain the failure) but rank lower: a fix is rarely in the test.
+ */
+export function scoreOf(x: { prox: number; recency: number; kind: FileKind }): number {
+  return ((x.prox * (SCORING.FLOOR + x.recency)) / (SCORING.FLOOR + SCORING.DIRTY)) * (x.kind === "test" ? SCORING.TEST_PENALTY : 1);
 }
 
 // ------------------------------------------------------------ blast radius

@@ -36,12 +36,24 @@ const max = Number(arg("max", "1000"));
 const PYTHON_VERSION = arg("python", "3.8");
 let PYTHON = PYTHON_VERSION; // resolved to a full interpreter path at startup (one download, no races)
 
+// Never let anything the benchmark runs (git, pip, tox, pre-commit) open a login prompt or window:
+// old projects reference repos that moved or went private (e.g. flake8's old GitLab home).
+const NO_PROMPTS = { GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", GIT_ASKPASS: "echo", SSH_ASKPASS: "echo", GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "credential.helper", GIT_CONFIG_VALUE_0: "" };
+Object.assign(process.env, NO_PROMPTS); // inherited by every child process below
+
 const sh = (cmd, args, opts = {}) => execFileSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 << 20, ...opts });
 const git = (cwd, ...args) => sh("git", args, { cwd, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } });
 
+/** Some BugsInPy files were saved as UTF-16 on Windows. */
+function readText(file) {
+  const b = fs.readFileSync(file);
+  if ((b[0] === 0xff && b[1] === 0xfe) || (b.length > 1 && b[1] === 0)) return b.toString("utf16le").replace(/^﻿/, "");
+  return b.toString("utf8").replace(/^﻿/, "");
+}
+
 function info(file) {
   const o = {};
-  for (const m of fs.readFileSync(file, "utf8").matchAll(/(\w+)="([^"]*)"/g)) o[m[1]] = m[2];
+  for (const m of readText(file).matchAll(/(\w+)="([^"]*)"/g)) o[m[1]] = m[2];
   return o;
 }
 
@@ -98,7 +110,7 @@ async function reproduce(project, id, meta, wt) {
   let r = await run("uv", ["venv", "-q", "--clear", "--python", PYTHON, venv], { cwd: wt, timeout: 300_000 });
   if (r.code !== 0) return { stage: "venv", detail: r.out.slice(-800) };
   const reqFile = path.join(bugDir, "requirements.txt");
-  const reqs = fs.existsSync(reqFile) ? fs.readFileSync(reqFile, "utf8").split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#") && !/^-e\s/.test(l)) : [];
+  const reqs = fs.existsSync(reqFile) ? readText(reqFile).split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#") && !/^-e\s/.test(l)) : [];
   const base = ["pytest"];
   // Install one by one (like BugsInPy's own compile script) so one unavailable pin doesn't sink the rest.
   r = await run("uv", ["pip", "install", "-q", "--python", venv, ...base], { cwd: wt, timeout: 600_000 });
@@ -116,12 +128,12 @@ async function reproduce(project, id, meta, wt) {
   const setup = path.join(bugDir, "setup.sh");
   const env = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, VIRTUAL_ENV: venv, PYTHONPATH: wt, PYTHONIOENCODING: "utf-8", PYTHONDONTWRITEBYTECODE: "1" };
   if (fs.existsSync(setup)) await run("bash", [setup], { cwd: wt, env, timeout: 600_000 });
-  const cmds = fs.readFileSync(path.join(bugDir, "run_test.sh"), "utf8").split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+  const cmds = readText(path.join(bugDir, "run_test.sh")).split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
   let out = "";
   let anyFailed = false;
   for (const c of cmds) {
     // Run the test the way the project's maintainers ran it, with the venv's python.
-    const cmd = c.replace(/^pytest\b/, "python -m pytest").replace(/^python3?\b/, "python");
+    const cmd = c.replace(/^tox\s+(?:-e\s+\S+\s+)?/, "pytest ").replace(/^pytest\b/, "python -m pytest").replace(/^python3?\b/, "python");
     const x = await run("bash", ["-c", cmd], { cwd: wt, env, timeout: 600_000 });
     out += `$ ${c}\n${x.out}\n`;
     if (x.code !== 0) anyFailed = true;

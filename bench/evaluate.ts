@@ -21,7 +21,7 @@ import { functionAtLine, traceSuspects } from "../src/core/analysis";
 import { pinClock } from "../src/core/clock";
 
 async function main() {
-  const [root, traceFile, patchFile, asOfStr] = process.argv.slice(2);
+  const [root, traceFile, patchFile, asOfStr, featuresFile] = process.argv.slice(2);
   const asOf = Number(asOfStr);
   pinClock(asOf);
   const g = CodeGraph.open(":memory:");
@@ -48,7 +48,7 @@ async function main() {
   }
 
   // ---- rankings
-  const r = traceSuspects(g, root, trace, 500);
+  const r = traceSuspects(g, root, trace, 500, { features: !!featuresFile });
   const blast = r.suspects.map((s) => s.id);
 
   const stack: string[] = [];
@@ -70,6 +70,7 @@ async function main() {
     return i < 0 ? null : i + 1;
   };
   const top = r.suspects.slice(0, 5).map((s) => ({ id: s.id, score: s.score, why: s.reasons.map((x) => x.text) }));
+  if (featuresFile) fs.writeFileSync(featuresFile, JSON.stringify({ asOf, truth: [...truth], stack, features: r.features }));
   const truthTouched = [...truth].some((id) => lastTouch.has(id) || dirty.has(id));
 
   console.log(
