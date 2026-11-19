@@ -1,5 +1,3 @@
-import * as fs from "fs";
-import * as path from "path";
 import { CodeGraph, Row, TEST_FILE_RE } from "./graph";
 import { mapToWorkspace, parseStackTrace } from "./stackTrace";
 import { BlastNode, BlastResult, Suspect, SuspectReason, TraceResult } from "./types";
@@ -173,7 +171,7 @@ export function traceSuspects(g: CodeGraph, root: string, traceText: string, lim
   const crashQ = crash.fn.id.split("#")[1].replace(/~\d+$/, "");
   const field = missingField(parsed.message, valueOrigin, crashQ);
   if (field) {
-    for (const w of fieldWriters(g, root, field.cls, field.attr, { ctorFallback: true })) {
+    for (const w of fieldWriters(g, field.cls, field.attr, { ctorFallback: true })) {
       const text = w.assigns
         ? `Sets \`${field.self}.${field.attr}\`, which was ${field.how} at the crash (${w.file}:${w.line})`
         : `Constructor of ${field.cls}; nothing in the class sets \`${field.self}.${field.attr}\`, which was ${field.how} at the crash`;
@@ -186,14 +184,10 @@ export function traceSuspects(g: CodeGraph, root: string, traceText: string, lim
   //   · fields the crash line reads → methods of the same class that change them (state set earlier)
   //   · 'X' object has no attribute 'y' → the other methods of X
   //   · module 'a.b' has no attribute 'x' → the functions of that module
-  const cls = classOf(crashQ);
-  if (cls) {
-    const code = readLines(root, inWs[0].relPath!, new Map())[inWs[0].line - 1] ?? "";
-    for (const attr of fieldsReadOnLine(code).slice(0, 4)) {
-      if (field && attr === field.attr) continue;
-      for (const w of fieldWriters(g, root, cls, attr, { mutations: true }))
-        if (w.id !== crash.fn.id) addSignal(w, SCORING.FIELD_READ, { kind: "field", text: `Changes \`self.${attr}\`, which the crash line reads (${w.file}:${w.line})` });
-    }
+  for (const f of fieldsReadAt(g, crash.fn.id, inWs[0].line).slice(0, 4)) {
+    if (field && f.name === field.attr) continue;
+    for (const w of fieldWriters(g, f.cls, f.name, { mutations: true }))
+      if (w.id !== crash.fn.id) addSignal(w, SCORING.FIELD_READ, { kind: "field", text: `Changes \`${f.cls}.${f.name}\`, which the crash line reads (${w.file}:${w.line})` });
   }
   if (field && field.how === "missing")
     for (const m of classMethods(g, field.cls)) addSignal(m, SCORING.MEMBER, { kind: "field", text: `Method of ${field.cls}, which had no attribute \`${field.attr}\`` });
@@ -290,15 +284,7 @@ export function missingField(message: string | undefined, origin: ReturnType<typ
   return undefined;
 }
 
-/**
- * Fields of `self`/`this` that a line of code reads (not method calls), e.g.
- *   `self.bracket_match.pop((self.depth, leaf.type))` → ["bracket_match", "depth"]
- */
-export function fieldsReadOnLine(code: string): string[] {
-  const out: string[] = [];
-  for (const m of code.matchAll(/\b(?:self|this)\.(\w+)\b(?!\s*\()/g)) if (!out.includes(m[1])) out.push(m[1]);
-  return out;
-}
+export { fieldsReadOnLine } from "./fields";
 
 /** `module 'a.b' has no attribute 'x'` / `<module 'a.b' from '…'> has no attribute 'x'` → { module: "a.b", attr: "x" } */
 export function missingModuleAttr(message: string | undefined): { module: string; attr: string } | undefined {
@@ -307,11 +293,6 @@ export function missingModuleAttr(message: string | undefined): { module: string
   return m ? { module: m[1], attr: m[2] } : undefined;
 }
 
-/** Class part of a qualified name: `Outer.Cart.total` → `Cart`; undefined for a top-level function. */
-const classOf = (qualified: string): string | undefined => {
-  const parts = qualified.split(".");
-  return parts.length > 1 ? parts[parts.length - 2] : undefined;
-};
 
 type FnQ = FnRow & { q: string };
 /** Direct methods of class `cls` (Cls.m or Outer.Cls.m), not functions nested inside them. */
@@ -327,34 +308,26 @@ function classMethods(g: CodeGraph, cls: string): FnQ[] {
   }) as unknown as FnQ[];
 }
 
-function readLines(root: string, file: string, cache: Map<string, string[]>): string[] {
-  let lines = cache.get(file);
-  if (!lines) {
-    try { lines = fs.readFileSync(path.join(root, file), "utf8").split(/\r?\n/); } catch { lines = []; }
-    cache.set(file, lines);
-  }
-  return lines;
+/**
+ * Functions that write field `cls.attr`, from the graph's WRITES edges (built at index time, fields.ts).
+ * By default only assignments; with `mutations`, also in-place changes (`x[k] = …`, `.append()`, `del`).
+ * With `ctorFallback`, the class's constructor when nothing writes it.
+ */
+function fieldWriters(g: CodeGraph, cls: string, attr: string, opts: { mutations?: boolean; ctorFallback?: boolean } = {}): (FnRow & { assigns: boolean; line: number })[] {
+  const out = g.q(
+    `MATCH (fn:Function)-[w:WRITES]->(:Field {id:$id})
+     WHERE $mut OR w.op = 'set'
+     RETURN fn.id AS id, fn.name AS name, fn.file AS file, fn.startLine AS startLine, fn.endLine AS endLine, min(w.line) AS line`,
+    { id: `${cls}.${attr}`, mut: !!opts.mutations }
+  ).map((r) => ({ ...(r as unknown as FnRow), assigns: true, line: r.line as number }));
+  if (out.length || !opts.ctorFallback) return out;
+  const ctor = classMethods(g, cls).find((f) => /(^|\.)(__init__|constructor)$/.test(f.q));
+  return ctor ? [{ ...ctor, assigns: false, line: ctor.startLine }] : [];
 }
 
-/**
- * Methods of `cls` that assign `self.attr` / `this.attr`. With `mutations`, also in-place changes:
- * `self.attr[k] = …`, `del self.attr[k]`, `self.attr.append(…)` and similar.
- */
-function fieldWriters(g: CodeGraph, root: string, cls: string, attr: string, opts: { mutations?: boolean; ctorFallback?: boolean } = {}): (FnRow & { assigns: boolean; line: number })[] {
-  const methods = classMethods(g, cls);
-  const set = `\\b(self|this)\\.${attr}\\s*(=(?!=)|[-+*/|&]=)|setattr\\(\\s*self\\s*,\\s*['"]${attr}['"]`;
-  const mutate = `|\\b(self|this)\\.${attr}\\[[^\\]]*\\]\\s*(=(?!=)|[-+*/|&]=)|\\bdel\\s+(self|this)\\.${attr}\\b|\\b(self|this)\\.${attr}\\.(append|extend|insert|add|update|pop|popitem|remove|discard|clear|setdefault|push|splice|shift|unshift|set|delete)\\(`;
-  const re = new RegExp(set + (opts.mutations ? mutate : ""));
-  const cache = new Map<string, string[]>();
-  const out: (FnRow & { assigns: boolean; line: number })[] = [];
-  for (const fn of methods) {
-    const lines = readLines(root, fn.file, cache);
-    for (let i = fn.startLine - 1; i < Math.min(fn.endLine, lines.length); i++)
-      if (re.test(lines[i])) { out.push({ ...fn, assigns: true, line: i + 1 }); break; }
-  }
-  if (out.length || !opts.ctorFallback) return out;
-  const ctor = methods.find((f) => /(^|\.)(__init__|constructor)$/.test(f.q));
-  return ctor ? [{ ...ctor, assigns: false, line: ctor.startLine }] : [];
+/** Fields the crash function reads on the crash line, from its READS edges. */
+function fieldsReadAt(g: CodeGraph, fnId: string, line: number): { cls: string; name: string }[] {
+  return g.q("MATCH (:Function {id:$id})-[r:READS]->(f:Field) WHERE r.line = $line RETURN DISTINCT f.cls AS cls, f.name AS name", { id: fnId, line }) as { cls: string; name: string }[];
 }
 
 export type FileKind = "src" | "test";

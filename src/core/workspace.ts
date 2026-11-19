@@ -5,6 +5,7 @@ import { parseTsFile, ParsedFileExtra } from "./tsIndexer";
 import { CodeGraph } from "./graph";
 import { dirtyRanges, isGitRepo, listGitFiles, recentCommits } from "./git";
 import { FunctionDef } from "./types";
+import { FieldAccess, fieldAccesses } from "./fields";
 
 const TS_EXT = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"];
 const PY_EXT = [".py"];
@@ -269,6 +270,15 @@ export class Workspace {
     return [...edges.values()];
   }
 
+  /** self.x / this.x reads and writes in a file (see fields.ts). */
+  private fieldsOf(pf: { path: string; functions: FunctionDef[] }): FieldAccess[] {
+    try {
+      return fieldAccesses(fs.readFileSync(path.join(this.root, pf.path), "utf8"), pf.functions);
+    } catch {
+      return [];
+    }
+  }
+
   // ------------------------------------------------------------------- public
 
   async fullIndex(): Promise<IndexStats> {
@@ -305,6 +315,7 @@ export class Workspace {
       const all = [...this.files.values()].flatMap((pf) => this.resolveCalls(pf));
       calls = all.length;
       g.replaceCalls([...this.files.keys()], all);
+      g.replaceFields([...this.files.keys()], [...this.files.values()].flatMap((pf) => this.fieldsOf(pf)));
     });
     const gitCommits = await this.refreshGit(true);
     g.checkpoint();
@@ -329,6 +340,7 @@ export class Workspace {
     this.graph.txn(() => {
       this.graph.upsertFile(pf, pf.functions, imports);
       this.graph.replaceCalls(affected.map((a) => a.path), affected.flatMap((a) => this.resolveCalls(a)));
+      this.graph.replaceFields([pf.path], this.fieldsOf(pf));
     });
     await this.refreshGit(false);
     this.graph.checkpoint();

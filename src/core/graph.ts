@@ -3,6 +3,7 @@ const relate = require("@relate/relate") as typeof import("@relate/relate");
 import type { Connection, Database } from "@relate/relate";
 import { CommitInfo, DirtyInfo, FunctionDef } from "./types";
 import { overlaps } from "./git";
+import { FieldAccess } from "./fields";
 
 export type Row = Record<string, unknown>;
 
@@ -19,6 +20,9 @@ export const TEST_FILE_RE = /(^|\/)(__tests__|tests?|spec)\/|\.(test|spec)\.[cm]
  *   (:Function)-[:CALLS {line, heuristic}]->(:Function)
  *   (:Commit)-[:MODIFIED]->(:File)
  *   (:Commit)-[:TOUCHED]->(:Function)     ← hunk ranges overlapped with the function body
+ *   (:Field {id:"Class.attr", cls, name})
+ *   (:Function)-[:READS {line}]->(:Field)          ← self.attr / this.attr read on that line
+ *   (:Function)-[:WRITES {line, op}]->(:Field)     ← op "set" (=, +=, setattr) or "mutate" (x[k]=, .append(), del …)
  */
 export class CodeGraph {
   readonly db: Database;
@@ -79,6 +83,7 @@ export class CodeGraph {
       "CREATE INDEX fn_file IF NOT EXISTS FOR (f:Function) ON (f.file)",
       "CREATE INDEX fn_name IF NOT EXISTS FOR (f:Function) ON (f.name)",
       "CREATE INDEX commit_hash IF NOT EXISTS FOR (c:Commit) ON (c.hash)",
+      "CREATE INDEX field_id IF NOT EXISTS FOR (f:Field) ON (f.id)",
     ]) {
       try {
         this.q(s);
@@ -153,6 +158,21 @@ export class CodeGraph {
         { edges: edges.slice(i, i + 2000) }
       );
     }
+  }
+
+  /** Replace the field READS/WRITES edges of every function defined in `files`. */
+  replaceFields(files: string[], accesses: FieldAccess[]) {
+    this.q("MATCH (a:Function)-[r:READS|WRITES]->(:Field) WHERE a.file IN $files DELETE r", { files });
+    const fields = [...new Map(accesses.map((a) => [a.field, { id: a.field, cls: a.cls, name: a.name }])).values()];
+    for (let i = 0; i < fields.length; i += 2000)
+      this.q("UNWIND $rows AS f MERGE (x:Field {id:f.id}) SET x.cls=f.cls, x.name=f.name", { rows: fields.slice(i, i + 2000) });
+    const rows = accesses.map((a) => ({ fn: a.fn, field: a.field, line: a.line, op: a.op ?? null }));
+    const reads = rows.filter((_, i) => accesses[i].kind === "read");
+    const writes = rows.filter((_, i) => accesses[i].kind === "write");
+    for (let i = 0; i < reads.length; i += 2000)
+      this.q("UNWIND $rows AS a MATCH (fn:Function {id:a.fn}), (f:Field {id:a.field}) CREATE (fn)-[:READS {line:a.line}]->(f)", { rows: reads.slice(i, i + 2000) });
+    for (let i = 0; i < writes.length; i += 2000)
+      this.q("UNWIND $rows AS a MATCH (fn:Function {id:a.fn}), (f:Field {id:a.field}) CREATE (fn)-[:WRITES {line:a.line, op:a.op}]->(f)", { rows: writes.slice(i, i + 2000) });
   }
 
   /** Rebuild the git layer: commits, MODIFIED/TOUCHED edges and dirty flags. */

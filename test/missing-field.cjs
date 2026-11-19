@@ -31,5 +31,42 @@ check("module attribute, repr wording", missingModuleAttr("AttributeError: <modu
 check("module attribute, mock.patch wording", missingModuleAttr("AttributeError: <module 'thefuck.rules.no_command' from 'C:\\\\w\\\\no_command.py'> does not have the attribute 'which'"), { module: "thefuck.rules.no_command", attr: "which" });
 check("object attribute is not a module", missingModuleAttr("AttributeError: 'tqdm' object has no attribute 'total'"), undefined);
 
+// Field reads/writes stored in the graph at index time (src/core/fields.ts).
+const fo = path.join(__dirname, `.fields-${process.pid}.cjs`);
+require("esbuild").buildSync({ entryPoints: [path.join(__dirname, "..", "src", "core", "fields.ts")], bundle: true, platform: "node", format: "cjs", outfile: fo, logLevel: "error" });
+const { fieldAccesses } = require(fo);
+const src = [
+  "class Tracker:",                                      // 1
+  "    def __init__(self):",                             // 2
+  "        self.depth = 0",                              // 3
+  "        self.seen = {}",                              // 4
+  "    def mark(self, leaf):",                           // 5
+  "        self.seen.pop((self.depth, leaf))  # crash",  // 6
+  "    def inc(self):",                                  // 7
+  "        self.depth += 1",                             // 8
+  "        def inner():",                                // 9
+  "            self.seen[1] = 2",                        // 10
+  "        self.go()",                                   // 11
+].join("\n");
+const fns = [
+  { id: "t.py#Tracker.__init__", qualifiedName: "Tracker.__init__", kind: "method", startLine: 2, endLine: 4 },
+  { id: "t.py#Tracker.mark", qualifiedName: "Tracker.mark", kind: "method", startLine: 5, endLine: 6 },
+  { id: "t.py#Tracker.inc", qualifiedName: "Tracker.inc", kind: "method", startLine: 7, endLine: 11 },
+  { id: "t.py#Tracker.inc.inner", qualifiedName: "Tracker.inc.inner", kind: "function", startLine: 9, endLine: 10 },
+];
+const acc = fieldAccesses(src, fns).map((a) => `${a.fn.split("#")[1]} ${a.kind}${a.op ? ":" + a.op : ""} ${a.field} @${a.line}`);
+check("index-time field accesses (assign, +=, mutate, nested function, call skipped)", acc, [
+  "Tracker.__init__ write:set Tracker.depth @3",
+  "Tracker.__init__ write:set Tracker.seen @4",
+  "Tracker.mark read Tracker.seen @6",
+  "Tracker.mark write:mutate Tracker.seen @6",
+  "Tracker.mark read Tracker.depth @6",
+  "Tracker.inc read Tracker.depth @8",
+  "Tracker.inc write:set Tracker.depth @8",
+  "Tracker.inc.inner read Tracker.seen @10",
+  "Tracker.inc.inner write:mutate Tracker.seen @10",
+]);
+fs.rmSync(fo, { force: true });
+
 fs.rmSync(out, { force: true });
 console.log(`MISSING-FIELD CHECKS PASSED (${n})`);
