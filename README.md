@@ -22,9 +22,9 @@ Then it ranks the suspects:
 
 | # | Suspect | Score | Why |
 |---|---|---|---|
-| **1** | `lookupCoupon` · `src/coupons.ts:10` | 87.4 | **Produced the undefined `coupon`** · called by the crash site · **changed 3h ago** by Alex Rivera: "Support regional coupon pools" |
-| 2 | `Cart.total` · `src/cart.ts:19` | 2.0 | Error thrown here · last changed 20d ago |
-| 3 | `Cart.summary` | 1.3 | On the stack, frame #2 |
+| **1** | `lookupCoupon` · `src/coupons.ts:10` | 91.9 | **Produced the undefined `coupon`** · called by the crash site · **changed 3h ago** by Alex Rivera: "Support regional coupon pools" |
+| 2 | `Cart.total` · `src/cart.ts:19` | 48.8 | Error thrown here · last changed 20d ago |
+| 3 | `Cart.summary` | 32.5 | On the stack, frame #2 |
 
 The uncommitted edit in `inventory.ts` is *more recent*, but it is **not ranked**: it isn't connected to the crash in the call graph. Recency alone is noise; recency × graph distance is signal.
 
@@ -66,6 +66,7 @@ Blast radius ("what breaks if I change this?") and MCP tools for agents are usef
   proximity = 1.0 crash site | 1/(1+0.5·i) i-th stack frame | 1/(1+hops) caller ≤5 hops up
             | 0.8/(1+hops) callee of the crash site ≤2 hops down | 0.4 × frame proximity for a direct callee of another frame
             | 1.0 the call that produced the undefined/null value | 0.9 the caller that passed it as an argument
+            | 0.6 a method that sets the missing or empty field | 0.5 the constructor, if no method sets it
   ```
 
   Every suspect ships with human-readable reasons, so the ranking is never a black box. The weights were tuned on half of a real-bug benchmark and checked on the other half (below).
@@ -75,7 +76,7 @@ Blast radius ("what breaks if I change this?") and MCP tools for agents are usef
 | | |
 |---|---|
 | **Auto-trace failed terminal commands** | With VS Code shell integration, when `npm test` / `pytest` / `node app.js` exits with a stack trace, a notification names the top suspect. One click opens the panel. |
-| **Where the undefined came from** | For `Cannot read properties of undefined/null`, Firefox/Safari equivalents and Python `'NoneType' object has no attribute …`, it reads the crash line, finds the expression that was empty (`coupon` in `coupon.pct`) and walks back to what produced it: a call (`const coupon = lookupCoupon(code)`, including destructuring and reassignment), a parameter the caller passed, a field, or an index lookup. The producing function becomes the top-weighted suspect. |
+| **Where the undefined came from** | For `Cannot read properties of undefined/null`, Firefox/Safari equivalents and Python `'NoneType' object has no attribute …`, it reads the crash line, finds the expression that was empty (`coupon` in `coupon.pct`) and walks back to what produced it: a call (`const coupon = lookupCoupon(code)`, including destructuring and reassignment), a parameter the caller passed, a field, or an index lookup. The producing function becomes the top-weighted suspect. When a field was missing or empty (`'X' object has no attribute 'y'`, or the value came from `self.y` / `this.y`), the methods of that class that set `y` become suspects too. If no method sets it, the constructor does. That code already returned, so it is never on the stack. |
 | **Paste any trace** | `Blast Radius: Trace Error` (Ctrl/Cmd+Alt+T) uses the selection or clipboard. Parses Node/V8, Chrome/Firefox/Vite/webpack URLs, Python tracebacks, pytest, and `tsc` errors. Docker/CI paths are mapped by suffix. |
 | **Blast radius** | CodeLens above every function: `3 callers · 12 transitive · changed 3h ago`. Click it (or Ctrl/Cmd+Alt+B) for transitive callers, importing files and **which test files to run**. |
 | **MCP tools for agents** | `trace_error_suspects`, `get_blast_radius`, `find_recent_suspects`, `find_circular_dependencies`, and `query_codegraph` (read-only Cypher; writes are rejected and rolled back). |
@@ -145,6 +146,7 @@ npm test     # builds throwaway demos in your temp folder (never touches ./demo-
              #  · every MCP tool with VS Code closed, with assertions on the ranking and git history
              #  · that the standalone MCP server never locks the graph file
              #  · 19 "where did the undefined come from?" cases (TS/JS/Python, V8/Firefox/Safari wording)
+             #  · 7 "which field was missing?" cases (Python AttributeError, self. / this. fields)
 ```
 
 Also verified by hand in real VS Code on Windows 11 (F5 → demo-shop → crash in the terminal → notification → panel).
@@ -153,22 +155,27 @@ Measured here: zod (525 files / 3,030 functions / 3,255 call edges) fully indexe
 
 ## Benchmark on real bugs
 
-[BugsInPy](https://github.com/soarsmu/BugsInPy) is a published set of real bugs from real Python projects. `bench/bugsinpy.mjs` checks out each buggy commit with its real git history, runs the test that exposes the bug, and asks each method where the fix belongs, with the clock pinned to when the bug was hit. 229 bugs from 12 projects were attempted; 140 reproduced on Windows 11 / Python 3.8 and have a function to point at. Ground truth is the function(s) the real fix changed.
+[BugsInPy](https://github.com/soarsmu/BugsInPy) is a published set of real bugs from real Python projects. `bench/bugsinpy.mjs` checks out each buggy commit with its real git history, runs the test that exposes the bug, and asks each method where the fix belongs, with the clock pinned to when the bug was hit. 229 bugs from 12 projects were attempted. 114 reproduced on Windows 11 / Python 3.8 and have a function to point at. Ground truth is the function(s) the real fix changed.
 
-Weights were chosen on a fixed half of the bugs (`bench/tune.mjs`). On the **other half**, never used for tuning (n = 70):
+A failing test only counts if it actually ran into the bug. 74 bugs were set aside because the test broke first, with the same rules for every method ([bench/classify.mjs](bench/classify.mjs)):
+* 48: no frame in the project's own code,
+* 22: an import failed while loading the test or a module (for example, Scrapy's pinned OpenSSL lacks `TLS_METHOD`),
+* 4: Windows' asyncio has no `add_reader`.
+
+Weights were chosen on a fixed half of the bugs (`bench/tune.mjs`). On the **other half**, never used for tuning (n = 59):
 
 | Method | Top 1 | Top 3 | MRR |
 |---|---|---|---|
-| **Blast Radius** | **27%** | **33%** | **0.30** |
-| Read the stack top-down | 17% | 23% | 0.20 |
-| Stack frames, most recently changed first (Sentry-style) | 19% | 23% | 0.20 |
-| Most recently changed functions (ignores the trace) | 11% | 17% | 0.16 |
+| **Blast Radius** | **31%** | **37%** | **0.34** |
+| Read the stack top-down | 20% | 27% | 0.23 |
+| Stack frames, most recently changed first (Sentry-style) | 22% | 27% | 0.24 |
+| Most recently changed functions (ignores the trace) | 12% | 17% | 0.16 |
 
-Where the gain comes from (all 140 bugs, full tables in [bench/RESULTS.md](bench/RESULTS.md)):
+Where the gain comes from (all 114 bugs, full tables in [bench/RESULTS.md](bench/RESULTS.md)):
 
-* **Failing assertions** (a test's `assert` fails, n = 68): the right function is #1 in 25% of bugs, vs 4% for reading the stack. The stack ends in the test, so the useful suspects are the code the test called that changed recently.
-* **Crashes** (n = 72): about the same as reading the stack (top 1: 29% vs 26%). The stack is already a strong signal here.
-* **Crashes fixed somewhere off the stack** (n = 46): nobody does well. Blast Radius gets 1 into the top 3, and "most recently changed" gets 5. In these real fixes the faulty value usually travels through object fields or several calls, which value tracing doesn't follow yet. The demo's case (a helper that returned undefined straight into the crash line) is handled, but it isn't the common case in this dataset.
+* **Failing assertions** (a test's `assert` fails, n = 70): the right function is #1 in 24% of bugs, vs 6% for reading the stack. The stack ends in the test, so the useful suspects are the code the test called that changed recently.
+* **Crashes** (n = 44): about the same as reading the stack (top 1: 45% vs 43%). The stack is already a strong signal here.
+* **Crashes fixed somewhere off the stack** (n = 18): still hard for everyone. Blast Radius gets 1 into the top 3, and no baseline gets any. The "who should have set this field?" signal fires on 2 of these bugs, and both have the same error, `'tqdm' object has no attribute 'total'`. It finds the fix in `__init__` for tqdm:5 (#2, where nothing found it before). In tqdm:6 the fix was in `__len__`, the crash site itself, and the signal pushed it from #1 to #2. The rest involve dict keys, async futures and APIs that didn't exist yet, which need real data-flow analysis.
 
 Reproduce: `node bench/bugsinpy.mjs --jobs 4` (needs `uv`; downloads the projects into `../bench-cache`; a few hours), then `node bench/report.mjs`. After changing the ranking, `node bench/rescore.mjs` re-scores in minutes without re-running any tests.
 
@@ -186,7 +193,7 @@ code --install-extension dist-vsix/blast-radius-darwin-arm64.vsix
 * Call resolution is syntactic (no type checker), for speed on every save. It resolves local functions, imports (named, default, namespace, CommonJS, re-exports, Python relative and absolute), `this.`/`self.` methods, and `new X()`. Unknown-receiver calls (`obj.method()`) link only when the method name is unique, and those edges carry `heuristic: true`.
 * Line mapping for older commits drifts as later edits shift lines. Recency weighting keeps that harmless in practice.
 * No source-map support yet: `dist/x.js` frames fall back to `src/x.ts` by name. ts-node, tsx, vitest, jest and Node type-stripping already print TS positions.
-* Value tracing is syntactic and stays inside the crashing function: it follows declarations, reassignments, destructuring and parameters, but not values that pass through other variables, closures or object fields set at runtime (fields are explained, not resolved). It runs only for undefined/null/None errors. Other off-stack suspects come from call structure plus history, so a changed helper that's connected but innocent can still rank high; its reasons say why it was picked.
+* Value tracing is syntactic and stays inside the crashing function: it follows declarations, reassignments, destructuring and parameters, but not values that pass through other variables, closures or object fields set at runtime (a missing `self.x` / `this.x` field is resolved to the methods that set it; fields of other objects are only explained). It runs only for undefined/null/None errors. Other off-stack suspects come from call structure plus history, so a changed helper that's connected but innocent can still rank high; its reasons say why it was picked.
 * Single-root workspaces (first folder), and one VS Code window per folder (Relate allows one writer per graph file).
 
 ## Built with: Relate capabilities, third-party tools and AI use

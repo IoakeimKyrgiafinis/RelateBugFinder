@@ -60,7 +60,8 @@ Every developer hits this several times a day: something broke, and the stack tr
 
 - **It works on real code:** zod (525 files, 3,030 functions, 3,255 call edges) fully indexes in 2.9 s. Graph queries take 1–30 ms.
 - **Tested end to end:** `npm test` runs the real built extension against a mocked VS Code API (terminal auto-trace, panel, CodeLens, incremental re-indexing, git-commit refresh, MCP through the live bridge), plus every MCP tool with VS Code closed. It's also been run by hand in real VS Code on Windows 11.
-- **Measured on real bugs:** on BugsInPy (140 reproduced bugs from 12 Python projects), with weights tuned on one half and tested on the other, Blast Radius puts the truly fixed function first in 27% of held-out bugs, against 17–19% for reading the stack or Sentry-style ordering (MRR 0.30 vs 0.20). The biggest gain is on failing assertions: 25% vs 4%. We also publish where it doesn't help yet: crashes fixed far off the stack.
+- **Measured on real bugs:** on BugsInPy (114 reproduced bugs from 12 Python projects), with weights tuned on one half and tested on the other, Blast Radius puts the truly fixed function first in 31% of held-out bugs. Reading the stack or Sentry-style ordering manages 20–22% (MRR 0.34 vs 0.23–0.24). The biggest gain is on failing assertions: 24% vs 6%. We also publish where it doesn't help yet: crashes fixed far off the stack (1 of 18 in the top 3, against none for the baselines).
+- **An honest benchmark:** 74 failures where the test broke before reaching the bug (import errors, Windows-only asyncio gaps) are set aside by explicit rules applied to every method alike. Counting them would have made every method look worse, without saying anything about root-cause ranking.
 - **Honest about prior art:** Sentry's Suspect Commits and several code-graph MCP servers cover parts of this. Ours is the combination that ranks suspects that aren't on the stack (see the README's comparison table).
 
 ## What's next

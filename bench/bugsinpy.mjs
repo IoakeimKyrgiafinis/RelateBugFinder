@@ -20,6 +20,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
+import { envReason } from "./classify.mjs";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CACHE = path.resolve(process.env.BENCH_CACHE ?? path.join(REPO, "..", "bench-cache"));
@@ -95,6 +96,14 @@ async function prepare(project, id, meta) {
   for (const t of tests) {
     try { git(wt, "checkout", meta.bug.fixed_commit_id, "--", t); } catch { /* file may not exist in fix */ }
   }
+  // Test data the fix added or changed (fixtures, expected-output files) that those tests read.
+  // Non-Python files under tests/, plus anything under a tests/**/data/ folder (Black keeps .py samples there).
+  const testData = git(wt, "diff", "--name-only", "--diff-filter=AM", meta.bug.buggy_commit_id, meta.bug.fixed_commit_id)
+    .split(/\r?\n/)
+    .filter((p) => p && !tests.includes(p) && /(^|\/)tests?\//.test(p) && (!/\.py$/.test(p) || /(^|\/)tests?\/(.*\/)?data\//.test(p)));
+  for (const p of testData) {
+    try { git(wt, "checkout", meta.bug.fixed_commit_id, "--", p); } catch { /* ignore */ }
+  }
   const old = new Date((asOf - 400 * 86400) * 1000).toISOString();
   git(wt, "add", "-A");
   try {
@@ -164,7 +173,8 @@ async function one(project, id) {
       rec.traceTail = rep.out.slice(-600);
       if (rep.stage === "reproduced") Object.assign(rec, await evaluate(wt, traceFile, path.join(bugDir, "bug_patch.txt"), asOf));
       // A failure with no frame in the project's own code is the environment breaking, not the bug.
-      if (rec.stage === "reproduced" && rec.framesInWorkspace === 0) rec.stage = "env-error";
+      const env = rec.stage === "reproduced" && envReason(rec, rep.out);
+      if (env) { rec.stage = "env-error"; rec.envReason = env; }
     } else rec.detail = rep.detail;
   } catch (e) {
     rec.stage = "error";

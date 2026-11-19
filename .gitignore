@@ -11,3 +11,4 @@ test/panel.html
 test/.value-origin-*.cjs
 bench/.dist
 test/.stack-trace-*.cjs
+test/.missing-field-*.cjs
