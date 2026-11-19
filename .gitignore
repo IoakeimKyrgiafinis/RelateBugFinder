@@ -13,3 +13,4 @@ bench/.dist
 test/.stack-trace-*.cjs
 test/.missing-field-*.cjs
 test/.fields-*.cjs
+test/.deep-trace-*.cjs

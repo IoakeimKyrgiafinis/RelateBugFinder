@@ -5,6 +5,7 @@ import { CodeGraph } from "./core/graph";
 import { isIndexable, Workspace } from "./core/workspace";
 import { ago, blastRadius, codeLensInfo, traceSuspects } from "./core/analysis";
 import { parseStackTrace } from "./core/stackTrace";
+import { recordRun, runDeepTrace } from "./core/deepTrace";
 import { startBridge } from "./mcp/bridge";
 import { BlastPanel, PanelMsg } from "./panel";
 
@@ -120,6 +121,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
     if (m.type === "open") return openAt(m.file, m.line);
     if (m.type === "trace") return showTrace(ctx, m.text);
     if (m.type === "blast") return showBlast(ctx, m.target);
+    if (m.type === "deepTrace") return deepTrace(ctx);
     if (m.type === "askAi") {
       await vscode.env.clipboard.writeText(m.prompt);
       try {
@@ -219,10 +221,49 @@ export function deactivate() {
 
 let panelHandler: (m: PanelMsg) => void = () => undefined;
 
+/** The last failing terminal command (only those can be re-run by Deep trace). */
+let lastFailure: { text: string; command: string; cwd?: string } | undefined;
+
 async function showTrace(ctx: vscode.ExtensionContext, text: string) {
   if (!ready) return void vscode.window.showWarningMessage("Blast Radius is still indexing…");
   const result = await serial(() => traceSuspects(graph!, root, text, cfg().get<number>("maxSuspects") ?? 10));
-  BlastPanel.show(ctx.extensionUri, panelHandler, { mode: "trace", result, input: text });
+  const command = lastFailure && lastFailure.text === text ? lastFailure.command : undefined;
+  BlastPanel.show(ctx.extensionUri, panelHandler, { mode: "trace", result, input: text, command });
+}
+
+/**
+ * Deep trace: re-run the failing command with recorders attached (Python: sys.setprofile via PYTHONPATH,
+ * Node: NODE_V8_COVERAGE), store what ran as a (:Run) in the graph, and re-rank with it. Always asks first:
+ * re-running a command can have side effects.
+ */
+async function deepTrace(ctx: vscode.ExtensionContext) {
+  const f = lastFailure;
+  if (!f || !ready) return;
+  const go = await vscode.window.showWarningMessage(
+    `Deep trace will run this command again, with a recorder attached:
+
+${f.command}
+
+Only continue if re-running it is safe (no deploys, payments or data changes).`,
+    { modal: true },
+    "Re-run with recording"
+  );
+  if (go !== "Re-run with recording") return void BlastPanel.show(ctx.extensionUri, panelHandler, { mode: "trace", result: await serial(() => traceSuspects(graph!, root, f.text, cfg().get<number>("maxSuspects") ?? 10)), input: f.text, command: f.command });
+  const t0 = Date.now();
+  const res = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Blast Radius: deep trace", cancellable: false }, async (p) => {
+    p.report({ message: `re-running ${f.command}` });
+    return runDeepTrace({ root, command: f.command, cwd: f.cwd, recorderDir: path.join(ctx.extensionPath, "python") });
+  });
+  if (!res.records.length) {
+    void vscode.window.showWarningMessage("Deep trace recorded nothing. It works for Python and Node commands (not tsx/ts-node yet, nor commands run in containers).");
+    return;
+  }
+  const text = parseStackTrace(res.output).frames.length ? res.output.slice(-256 * 1024) : f.text;
+  const { result, functions } = await serial(() => {
+    const run = recordRun(graph!, root, res.records, { command: f.command, failed: res.exitCode !== 0 });
+    return { result: traceSuspects(graph!, root, text, cfg().get<number>("maxSuspects") ?? 10, { run: run.runId }), functions: run.functions };
+  });
+  BlastPanel.show(ctx.extensionUri, panelHandler, { mode: "trace", result, input: text, command: f.command, deep: { functions, seconds: Math.round((Date.now() - t0) / 100) / 10, exitCode: res.exitCode } });
 }
 
 async function showBlast(ctx: vscode.ExtensionContext, target: string) {
@@ -266,6 +307,8 @@ function setupTerminal(ctx: vscode.ExtensionContext) {
       if (!parsed.frames.length) return;
       // A successful command that merely logged "Error" + a file:line (linters, test logs) is not a crash.
       if (e.exitCode === 0 && parsed.language === "unknown") return;
+      const command = e.execution.commandLine?.value?.trim();
+      lastFailure = command ? { text, command, cwd: e.execution.cwd?.fsPath } : undefined;
       const result = await serial(() => traceSuspects(graph!, root, text, cfg().get<number>("maxSuspects") ?? 10));
       const top = result.suspects[0];
       if (!top) return;
@@ -281,7 +324,7 @@ function setupTerminal(ctx: vscode.ExtensionContext) {
         "Show suspects",
         "Open top suspect"
       );
-      if (pick === "Show suspects") BlastPanel.show(ctx.extensionUri, panelHandler, { mode: "trace", result, input: text });
+      if (pick === "Show suspects") BlastPanel.show(ctx.extensionUri, panelHandler, { mode: "trace", result, input: text, command: lastFailure?.command });
       if (pick === "Open top suspect") void openAt(top.file, top.startLine);
     }),
     vscode.window.onDidCloseTerminal((t) => buffers.delete(t))

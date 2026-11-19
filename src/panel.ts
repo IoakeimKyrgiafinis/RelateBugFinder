@@ -7,11 +7,12 @@ export type PanelMsg =
   | { type: "trace"; text: string }
   | { type: "blast"; target: string }
   | { type: "askAi"; prompt: string }
+  | { type: "deepTrace" }
   | { type: "ready" };
 
 export type PanelState =
   | { mode: "welcome"; stats?: Record<string, unknown>; clipboard?: string }
-  | { mode: "trace"; result: TraceResult; input: string }
+  | { mode: "trace"; result: TraceResult; input: string; command?: string; deep?: { functions: number; seconds: number; exitCode: number | null } }
   | { mode: "blast"; result: BlastResult }
   | { mode: "error"; message: string };
 
@@ -74,7 +75,7 @@ function html(nonce: string): string {
   .name { font-weight: 600; } .loc { color: var(--muted); }
   .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 2px 0; }
   .chip { font-size: .8em; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--vscode-panel-border); color: var(--muted); }
-  .chip.crash-site { border-color: var(--hot); color: var(--hot); } .chip.downstream { border-color: var(--warm); color: var(--warm); }
+  .chip.crash-site { border-color: var(--hot); color: var(--hot); } .chip.downstream { border-color: var(--warm); color: var(--warm); } .chip.ran { border-color: var(--warm); color: var(--warm); }
   .origin { border-left: 3px solid var(--hot); background: var(--vscode-textBlockQuote-background); padding: 8px 12px; margin: 10px 0; border-radius: 0 4px 4px 0; }
   .origin b { color: var(--hot); } .origin code { font-family: var(--vscode-editor-font-family); }
   .chip.value-origin { background: var(--warm); color: var(--vscode-editor-background); border-color: var(--warm); }
@@ -103,7 +104,7 @@ window.addEventListener("message", (e) => { last = e.data; render(e.data); });
 vscode.postMessage({ type: "ready" });
 
 function render(s) {
-  if (s.mode === "trace") return renderTrace(s.result, s.input);
+  if (s.mode === "trace") return renderTrace(s.result, s.input, s);
   if (s.mode === "blast") return renderBlast(s.result);
   if (s.mode === "error") { app.innerHTML = '<h1>Blast Radius</h1><div class="err">' + esc(s.message) + "</div>" + pasteBox(""); return bindPaste(); }
   app.innerHTML = '<h1>Blast Radius</h1><p class="muted">Paste an error or stack trace (Node, browser, Python, pytest, tsc). Failed commands in the integrated terminal are traced automatically.</p>' +
@@ -113,11 +114,13 @@ function render(s) {
 function pasteBox(v) { return '<textarea id="t" placeholder="TypeError: … at fn (src/file.ts:12:3)">' + esc(v) + '</textarea><div class="row" style="margin-top:8px"><button id="go">Find suspects</button></div>'; }
 function bindPaste() { const b = document.getElementById("go"); if (b) b.onclick = () => vscode.postMessage({ type: "trace", text: document.getElementById("t").value }); }
 
-function renderTrace(r, input) {
+function renderTrace(r, input, s) {
   let h = "<h1>Most likely root causes</h1>";
   if (r.note) h += '<div class="err">' + esc(r.note) + "</div>";
   if (!r.suspects.length) { app.innerHTML = h + '<p>No suspects: ' + esc(r.note || "no frames matched this workspace") + "</p>" + pasteBox(input); return bindPaste(); }
   if (r.crashSite) h += '<p class="muted">Thrown in <a data-f="' + esc(r.crashSite.file) + '" data-l="' + r.crashSite.line + '">' + esc(r.crashSite.file) + ":" + r.crashSite.line + "</a> · ranked by recency × graph distance</p>";
+  if (s && s.deep) h += '<div class="origin"><b>Deep trace</b><br>Re-ran <code>' + esc(s.command || "") + '</code> with recording (' + s.deep.seconds + ' s): ' + s.deep.functions + ' of your functions ran. Suspects that ran, especially just before the crash, now rank higher.</div>';
+  else if (s && s.command) h += '<div class="row" style="margin:8px 0"><button class="secondary" id="deep" title="Runs the command again with a recorder attached, to see which functions actually ran before the crash">Deep trace: re-run <code>' + esc(s.command.length > 40 ? s.command.slice(0, 40) + "…" : s.command) + '</code> with recording</button></div>';
   if (r.valueOrigin) h += '<div class="origin"><b>Where the ' + esc(r.valueOrigin.value) + " came from</b><br>" + esc(r.valueOrigin.summary).replace(/\x60([^\x60]+)\x60/g, "<code>$1</code>") + "</div>";
   const max = Math.max(...r.suspects.map((s) => s.score), 1);
   r.suspects.forEach((s, i) => {
@@ -136,6 +139,8 @@ function renderTrace(r, input) {
   bindLinks();
   document.getElementById("again").onclick = () => render({ mode: "welcome", clipboard: "" });
   document.getElementById("ai").onclick = () => vscode.postMessage({ type: "askAi", prompt: aiPrompt(r) });
+  const d = document.getElementById("deep");
+  if (d) d.onclick = () => { d.disabled = true; d.textContent = "Re-running with recording…"; vscode.postMessage({ type: "deepTrace" }); };
 }
 
 function aiPrompt(r) {

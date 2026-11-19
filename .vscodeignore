@@ -3,6 +3,7 @@ test/**
 demo/**
 demo-shop/**
 scripts/**
+bench/**
 dist-vsix/**
 **/*.map
 esbuild.mjs
