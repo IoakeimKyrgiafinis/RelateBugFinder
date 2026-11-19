@@ -24,6 +24,18 @@ Finding it means grepping, `git log -p`, and reading code. Blast Radius finds it
 
 The uncommitted edit in `inventory.ts` is *more recent*, but it is **not ranked**: it isn't connected to the crash in the call graph. Recency alone is noise; recency × graph distance is signal.
 
+## How it differs from existing tools
+
+Parts of this exist already, and it's worth being precise about which part is new.
+
+| Tool | What it answers | Why it misses `lookupCoupon` |
+|---|---|---|
+| **Sentry Suspect Commits** | "Who last changed the code *in the stack trace*?" | It only looks at stack frames, so it blames the 3-week-old commit that wrote `Cart.total`. It also works on production errors in a hosted service, after the code has shipped. |
+| **Code-graph MCP servers** (codegraph, code-graph-mcp, Arbor, …) | "What is connected to this function?" (call graphs, impact analysis for agents) | They have the call graph but don't read stack traces or rank by change history. You'd have to ask "what does `Cart.total` call?" and then run `git log` on each result yourself. |
+| **Blast Radius** | "What changed recently *in the code connected to this error*?" | Combines the two: stack frames + call-graph neighbours, weighted by function-level git history. Runs locally, in your editor, while you develop. |
+
+Blast radius ("what breaks if I change this?") and MCP tools for agents are useful supporting features, but they are not new on their own. The new part is ranking suspects **off the stack** from a trace.
+
 ## How it works
 
 ```
@@ -47,7 +59,8 @@ The uncommitted edit in `inventory.ts` is *more recent*, but it is **not ranked*
   ```
   score = recency × proximity
   recency   = 1.0 uncommitted | 0.9·½^(age/72h) function changed | 0.35·½^(age/72h) only file changed | 0.02
-  proximity = 1.0 crash site | 1/(1+0.5·i) i-th stack frame | 1/(1+hops) caller ≤5 hops up | 0.8/(1+hops) callee ≤2 hops down
+  proximity = 1.0 crash site | 1/(1+0.5·i) i-th stack frame | 1/(1+hops) caller ≤5 hops up
+            | 0.8/(1+hops) callee of the crash site ≤2 hops down | 0.4 × frame proximity for a direct callee of another frame
   ```
 
   Every suspect ships with human-readable reasons, so the ranking is never a black box.
@@ -65,7 +78,7 @@ The uncommitted edit in `inventory.ts` is *more recent*, but it is **not ranked*
 
 ### Why the MCP server talks to the extension
 
-Relate allows **one writer per `.rl` file**, and the extension holds it. The MCP server therefore forwards calls to a token-protected `127.0.0.1` endpoint inside the extension, so agents query the *live* graph, including a file saved a second ago. If VS Code isn't running, the MCP server opens (and if needed builds) the graph file itself, so it also works from a plain terminal with Claude Code.
+Relate allows **one writer per `.rl` file**, and the extension holds it. The MCP server therefore forwards calls to a token-protected `127.0.0.1` endpoint inside the extension, so agents query the *live* graph, including a file saved a second ago. If VS Code isn't running, the MCP server indexes the workspace into an **in-memory** Relate graph (about 1–3 s, refreshed when older than 15 s), so it also works from a plain terminal with Claude Code. It deliberately never opens the `.rl` file: Relate releases a writer lock only when the process exits, and an agent session can run for hours, so holding the file would stop the extension from starting.
 
 ## Try it in 3 minutes (judges start here)
 
@@ -93,7 +106,7 @@ code .                  # press F5: a new VS Code window opens on demo-shop with
 
 **Then, in demo-shop:**
 
-1. The status bar shows `⚡ 20 fns · 20 calls` once indexing finishes (under a second).
+1. The status bar (bottom left) shows `20 fns · 20 calls` once indexing finishes (under a second).
 2. In the integrated terminal, run `npm start -- NOPE`. It crashes with `TypeError … reading 'pct'`. A notification names **lookupCoupon** as the top suspect. Click **Show suspects**.
 3. Open `src/money.ts`. Click the CodeLens above `applyDiscount` to see its blast radius and the tests to run.
 4. Copilot agent mode lists the *Blast Radius* MCP tools automatically. For Claude Code or Cursor, run **Blast Radius: Register MCP Server**.
@@ -120,11 +133,14 @@ claude mcp add blast-radius -- node /abs/path/blast-radius/dist/mcp.js --root /a
 
 ```bash
 npm run typecheck
-node test/e2e.cjs demo-shop demo-shop/trace.txt # real dist/extension.js against a mocked VS Code API:
-                                        # activation, terminal auto-trace, panel, CodeLens, incremental
-                                        # re-index, git-commit refresh, MCP through the live bridge
-node test/mcp-e2e.mjs demo-shop demo-shop/trace.txt
+npm test     # builds throwaway demos in your temp folder (never touches ./demo-shop) and runs:
+             #  · the real dist/extension.js against a mocked VS Code API: activation, terminal auto-trace,
+             #    panel, CodeLens, incremental re-index, git-commit refresh, MCP through the live bridge
+             #  · every MCP tool with VS Code closed, with assertions on the ranking and git history
+             #  · that the standalone MCP server never locks the graph file
 ```
+
+Also verified by hand in real VS Code on Windows 11 (F5 → demo-shop → crash in the terminal → notification → panel).
 
 Measured here: zod (525 files / 3,030 functions / 3,255 call edges) fully indexes in 2.9 s. psf/requests (37 files / 711 functions) in 0.5 s. Graph queries take 1–30 ms.
 
@@ -142,7 +158,8 @@ code --install-extension dist-vsix/blast-radius-darwin-arm64.vsix
 * Call resolution is syntactic (no type checker), for speed on every save. It resolves local functions, imports (named, default, namespace, CommonJS, re-exports, Python relative and absolute), `this.`/`self.` methods, and `new X()`. Unknown-receiver calls (`obj.method()`) link only when the method name is unique, and those edges carry `heuristic: true`.
 * Line mapping for older commits drifts as later edits shift lines. Recency weighting keeps that harmless in practice.
 * No source-map support yet: `dist/x.js` frames fall back to `src/x.ts` by name. ts-node, tsx, vitest, jest and Node type-stripping already print TS positions.
-* Single-root workspaces (first folder).
+* No dataflow analysis: off-stack suspects come from call structure plus history, not from tracking where the bad value came from. A changed helper that's connected but innocent can still rank high; its reasons say why it was picked.
+* Single-root workspaces (first folder), and one VS Code window per folder (Relate allows one writer per graph file).
 
 ## Built with: Relate capabilities, third-party tools and AI use
 
@@ -165,8 +182,8 @@ code --install-extension dist-vsix/blast-radius-darwin-arm64.vsix
 
 All are open-source, used under their licenses. No pre-existing code of mine was reused. The project was started during the contest period (November 2026).
 
-**AI tools:** <!-- EDIT THIS to reflect what you actually did -->
-I used Claude (Anthropic) as a coding assistant to build this project. It wrote most of the initial implementation from my design brief: the indexers, the Relate graph layer, scoring, the webview, the MCP server and the test harness. I chose the idea and the scope, reviewed the code, tested it, and [describe your own changes, debugging, design decisions and demo work here]. The demo video is my own recording.
+**AI tools:** <!-- CHECK THIS before submitting: add what you did yourself, remove anything that isn't true -->
+This project was built with heavy use of Claude (Anthropic). Claude wrote nearly all of the code, tests and documentation: first in a claude.ai conversation (the initial implementation, tested in a cloud sandbox), then in Claude Code on my own machine (running the extension in real VS Code on Windows, a code review, and fixes such as the MCP fallback that wiped git history and held the graph's file lock). I chose the idea and the hackathon, set the scope and priorities, decided which findings to act on, and tested the extension in VS Code myself. The demo video is my own recording.
 
 ## Roadmap
 

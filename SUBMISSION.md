@@ -45,19 +45,21 @@ Every developer hits this several times a day: something broke, and the stack tr
 - **Graph model:** `(:File)-[:IMPORTS]->(:File)`, `(:File)-[:DEFINES]->(:Function)`, `(:Function)-[:CALLS]->(:Function)`, `(:Commit)-[:MODIFIED]->(:File)` and `(:Commit)-[:TOUCHED]->(:Function)`. The `TOUCHED` edges come from intersecting `git log -U0` diff hunks with function line ranges. Uncommitted edits are flagged from `git diff HEAD`.
 - **Engine:** Relate runs embedded in the extension host and stores everything in one `.vscode/codegraph.rl` file. Suspect ranking, blast radius and cycle detection are Cypher variable-length traversals.
 - **Incremental updates:** on save, only that file and its importers are re-resolved (~300 ms). Stable function ids keep incoming edges intact.
-- **Relate's single-writer lock, turned into a feature.** The MCP server forwards to a token-protected localhost bridge inside the extension, so agents always query the *live* graph. When VS Code is closed, it opens the file itself.
+- **Relate's single-writer lock, turned into a feature.** The MCP server forwards to a token-protected localhost bridge inside the extension, so agents always query the *live* graph. When VS Code is closed, it builds an in-memory Relate graph instead, so it never blocks the extension.
 - **Safe agent Cypher:** every agent query runs in a transaction that is always rolled back, and write statements are rejected.
 
 ## Challenges
 
 - **Relate's single-writer lock:** a second process can't open the graph file, even read-only, while the extension holds it. That forced the bridge design above, which turned out better.
+- **A lock that never lets go:** Relate releases a file's writer lock only when the process exits. Our first standalone MCP server opened the graph file, so a long agent session silently stopped VS Code's extension from starting. It now indexes into an in-memory graph, and a test checks the file stays openable while the server runs.
 - **TypeScript 7:** npm's latest TypeScript is the Go-native compiler and no longer exposes the JS compiler API, so we pinned 5.9.
 - **Lost line numbers:** git hunks use each commit's own line numbering, which drifts. We map older commits approximately and let recency weighting absorb the error.
 
 ## Accomplishments
 
 - **It works on real code:** zod (525 files, 3,030 functions, 3,255 call edges) fully indexes in 2.9 s. Graph queries take 1–30 ms.
-- **Tested end to end:** 12 automated checks run the real built extension, including terminal auto-trace, incremental re-indexing, git-commit refresh, and MCP through the live bridge.
+- **Tested end to end:** `npm test` runs the real built extension against a mocked VS Code API (terminal auto-trace, panel, CodeLens, incremental re-indexing, git-commit refresh, MCP through the live bridge), plus every MCP tool with VS Code closed. It's also been run by hand in real VS Code on Windows 11.
+- **Honest about prior art:** Sentry's Suspect Commits and several code-graph MCP servers cover parts of this. Ours is the combination that ranks suspects that aren't on the stack (see the README's comparison table).
 
 ## What's next
 
