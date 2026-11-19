@@ -27,6 +27,7 @@ const a = fresh();
 run(["test/mcp-lock.mjs", a], "MCP server with VS Code closed (in-memory graph, no file lock)");
 run(["test/mcp-e2e.mjs", a, path.join(a, "trace.txt")], "MCP tools, standalone");
 run(["test/deep-trace.cjs", a], "Deep trace: re-run with recorders (Node V8 coverage, Python sys.setprofile) into Relate");
+run(["test/e2e-deep.cjs"], "Deep trace through the extension UI: notification, panel buttons, confirmations, runs in the live graph");
 const b = fresh();
 run(["test/e2e.cjs", b, path.join(b, "trace.txt")], "Extension end to end (mocked VS Code API) + MCP via live bridge");
 

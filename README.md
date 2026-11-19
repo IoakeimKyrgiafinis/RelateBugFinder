@@ -153,6 +153,8 @@ npm test     # builds throwaway demos in your temp folder (never touches ./demo-
              #  · 19 "where did the undefined come from?" cases (TS/JS/Python, V8/Firefox/Safari wording)
              #  · 15 "which field was missing?" cases (AttributeError wordings incl. mock.patch, self. / this. fields read on a line, field reads/writes)
              #  · Deep trace end to end (Node V8 coverage, Python recorder) and spectrum ranking against a related passing test
+             #  · the Deep trace UI flow: failing terminal command → panel → Deep trace and Compare buttons (real panel HTML
+             #    in jsdom) → confirmation dialogs → runs stored in the live graph, checked through the MCP bridge
 ```
 
 Also verified by hand in real VS Code on Windows 11 (F5 → demo-shop → crash in the terminal → notification → panel).
