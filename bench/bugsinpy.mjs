@@ -33,7 +33,8 @@ const projects = arg("projects", DEFAULT_PROJECTS.join(",")).split(",");
 const only = arg("only");
 const jobs = Number(arg("jobs", "3"));
 const max = Number(arg("max", "1000"));
-const PYTHON = arg("python", "3.8");
+const PYTHON_VERSION = arg("python", "3.8");
+let PYTHON = PYTHON_VERSION; // resolved to a full interpreter path at startup (one download, no races)
 
 const sh = (cmd, args, opts = {}) => execFileSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 << 20, ...opts });
 const git = (cwd, ...args) => sh("git", args, { cwd, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } });
@@ -94,7 +95,7 @@ async function reproduce(project, id, meta, wt) {
   const bugDir = path.join(DATASET, "projects", project, "bugs", id);
   const venv = path.join(CACHE, "venvs", `${project}-${id}`); // outside the worktree: not "untracked changes"
   const bin = path.join(venv, WIN ? "Scripts" : "bin");
-  let r = await run("uv", ["venv", "-q", "--python", PYTHON, venv], { cwd: wt, timeout: 300_000 });
+  let r = await run("uv", ["venv", "-q", "--clear", "--python", PYTHON, venv], { cwd: wt, timeout: 300_000 });
   if (r.code !== 0) return { stage: "venv", detail: r.out.slice(-800) };
   const reqFile = path.join(bugDir, "requirements.txt");
   const reqs = fs.existsSync(reqFile) ? fs.readFileSync(reqFile, "utf8").split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#") && !/^-e\s/.test(l)) : [];
@@ -110,6 +111,8 @@ async function reproduce(project, id, meta, wt) {
       if (y.code !== 0) failed.push(req);
     }
   }
+  // Era-appropriate setuptools: new ones vendor libraries that crash against old pinned deps (e.g. importlib-metadata).
+  await run("uv", ["pip", "install", "-q", "--python", venv, "setuptools<58"], { cwd: wt, timeout: 600_000 });
   const setup = path.join(bugDir, "setup.sh");
   const env = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, VIRTUAL_ENV: venv, PYTHONPATH: wt, PYTHONIOENCODING: "utf-8", PYTHONDONTWRITEBYTECODE: "1" };
   if (fs.existsSync(setup)) await run("bash", [setup], { cwd: wt, env, timeout: 600_000 });
@@ -148,6 +151,8 @@ async function one(project, id) {
       fs.writeFileSync(traceFile, rep.out);
       rec.traceTail = rep.out.slice(-600);
       if (rep.stage === "reproduced") Object.assign(rec, await evaluate(wt, traceFile, path.join(bugDir, "bug_patch.txt"), asOf));
+      // A failure with no frame in the project's own code is the environment breaking, not the bug.
+      if (rec.stage === "reproduced" && rec.framesInWorkspace === 0) rec.stage = "env-error";
     } else rec.detail = rep.detail;
   } catch (e) {
     rec.stage = "error";
@@ -160,6 +165,8 @@ async function one(project, id) {
 }
 
 // ---------------------------------------------------------------- main
+try { execFileSync("uv", ["python", "install", PYTHON_VERSION], { stdio: "ignore" }); } catch { /* already there, or a harmless link warning */ }
+PYTHON = sh("uv", ["python", "find", PYTHON_VERSION]).trim();
 if (!fs.existsSync(DATASET)) {
   fs.mkdirSync(CACHE, { recursive: true });
   sh("git", ["clone", "-q", "--depth", "1", "https://github.com/soarsmu/BugsInPy.git", DATASET], { timeout: 600_000 });
