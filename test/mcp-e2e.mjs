@@ -27,6 +27,8 @@ console.log("write attempt:", w.isError, w.data);
 // The graph must carry git history in every mode (a past bug wiped it in the standalone fallback).
 assert.equal(tools.length, 5);
 assert.equal(tr.data.suspects[0].id, "src/coupons.ts#lookupCoupon", "wrong top suspect");
+assert.equal(tr.data.valueOrigin?.source?.callee, "lookupCoupon", "value origin not traced");
+assert.ok(tr.data.suspects[0].why[0].startsWith("Produced the undefined `coupon`"), "value-origin reason missing");
 assert.match(br.data.summary, /applyDiscount/);
 assert.ok(cy.data.count >= 1, "expected the demo's import cycle");
 assert.ok(rc.data.some((r) => r.id === "src/coupons.ts#lookupCoupon"), "recent changes lost");

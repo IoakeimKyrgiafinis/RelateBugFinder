@@ -20,7 +20,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "trace_error_suspects",
     description:
-      "Paste a stack trace / error output (Node, browser, Python, pytest, tsc). Returns the crash site and a ranked list of the functions most " +
+      "Paste a stack trace / error output (Node, browser, Python, pytest, tsc). For undefined/null/None errors it also says where the bad value came from (the call, parameter or field that produced it). Returns the crash site and a ranked list of the functions most " +
       "likely to have caused it: stack frames plus static callers (≤5 hops up) and callees (≤2 hops down) from the pre-built call graph, " +
       "weighted by how recently git (or uncommitted edits) touched each function. Use this BEFORE reading files to decide where to look.",
     params: {
@@ -76,6 +76,7 @@ export function callTool(g: CodeGraph, root: string, name: string, args: Record<
       return {
         error: r.note,
         crashSite: r.crashSite,
+        valueOrigin: r.valueOrigin && { summary: r.valueOrigin.summary, expression: r.valueOrigin.expression, value: r.valueOrigin.value, source: r.valueOrigin.source },
         suspects: r.suspects.map((s) => ({
           rank: 0,
           id: s.id,

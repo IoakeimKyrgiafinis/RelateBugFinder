@@ -20,6 +20,7 @@ const fresh = () => {
 
 if (!fs.existsSync(path.join(repo, "dist", "extension.js"))) run(["esbuild.mjs"], "build");
 
+run(["test/value-origin.cjs"], "Where did the undefined come from? (TS/JS/Python unit cases)");
 const a = fresh();
 run(["test/mcp-lock.mjs", a], "MCP server with VS Code closed (in-memory graph, no file lock)");
 run(["test/mcp-e2e.mjs", a, path.join(a, "trace.txt")], "MCP tools, standalone");

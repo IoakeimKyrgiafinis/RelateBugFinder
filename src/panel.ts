@@ -75,6 +75,9 @@ function html(nonce: string): string {
   .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 2px 0; }
   .chip { font-size: .8em; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--vscode-panel-border); color: var(--muted); }
   .chip.crash-site { border-color: var(--hot); color: var(--hot); } .chip.downstream { border-color: var(--warm); color: var(--warm); }
+  .origin { border-left: 3px solid var(--hot); background: var(--vscode-textBlockQuote-background); padding: 8px 12px; margin: 10px 0; border-radius: 0 4px 4px 0; }
+  .origin b { color: var(--hot); } .origin code { font-family: var(--vscode-editor-font-family); }
+  .chip.value-origin { background: var(--warm); color: var(--vscode-editor-background); border-color: var(--warm); }
   .chip.uncommitted { background: var(--hot); color: var(--vscode-editor-background); border-color: var(--hot); }
   ul.reasons { margin: 4px 0 0 0; padding-left: 18px; } ul.reasons li { margin: 1px 0; }
   .score { text-align: right; min-width: 70px; } .bar { height: 5px; border-radius: 3px; background: var(--vscode-panel-border); margin-top: 4px; overflow: hidden; } .bar > i { display: block; height: 100%; background: var(--hot); }
@@ -115,14 +118,15 @@ function renderTrace(r, input) {
   if (r.note) h += '<div class="err">' + esc(r.note) + "</div>";
   if (!r.suspects.length) { app.innerHTML = h + '<p>No suspects: ' + esc(r.note || "no frames matched this workspace") + "</p>" + pasteBox(input); return bindPaste(); }
   if (r.crashSite) h += '<p class="muted">Thrown in <a data-f="' + esc(r.crashSite.file) + '" data-l="' + r.crashSite.line + '">' + esc(r.crashSite.file) + ":" + r.crashSite.line + "</a> · ranked by recency × graph distance</p>";
+  if (r.valueOrigin) h += '<div class="origin"><b>Where the ' + esc(r.valueOrigin.value) + " came from</b><br>" + esc(r.valueOrigin.summary).replace(/\x60([^\x60]+)\x60/g, "<code>$1</code>") + "</div>";
   const max = Math.max(...r.suspects.map((s) => s.score), 1);
   r.suspects.forEach((s, i) => {
     const dirty = s.reasons.some((x) => x.kind === "uncommitted");
     h += '<div class="card' + (i === 0 ? " top" : "") + '"><div class="rank">' + (i + 1) + "</div><div>" +
       '<div class="name"><a data-f="' + esc(s.file) + '" data-l="' + s.startLine + '">' + esc(shortName(s.id)) + "</a></div>" +
       '<div class="loc mono">' + esc(s.file) + ":" + s.startLine + "</div>" +
-      '<div class="chips"><span class="chip ' + s.relation + '">' + s.relation.replace("-", " ") + (s.hops ? " · " + s.hops + " hop" + (s.hops > 1 ? "s" : "") : "") + "</span>" + (dirty ? '<span class="chip uncommitted">uncommitted</span>' : "") + "</div>" +
-      '<ul class="reasons">' + s.reasons.map((x) => "<li>" + esc(x.text) + "</li>").join("") + "</ul></div>" +
+      '<div class="chips"><span class="chip ' + s.relation + '">' + s.relation.replace("-", " ") + (s.hops ? " · " + s.hops + " hop" + (s.hops > 1 ? "s" : "") : "") + "</span>" + (dirty ? '<span class="chip uncommitted">uncommitted</span>' : "") + (s.reasons.some((x) => x.kind === "value-origin") ? '<span class="chip value-origin">source of the ' + esc(r.valueOrigin ? r.valueOrigin.value : "bad value") + "</span>" : "") + "</div>" +
+      '<ul class="reasons">' + s.reasons.map((x) => "<li>" + esc(x.text).replace(/\x60([^\x60]+)\x60/g, "<code>$1</code>") + "</li>").join("") + "</ul></div>" +
       '<div class="score"><b>' + s.score.toFixed(1) + '</b><div class="bar"><i style="width:' + (100 * s.score / max) + '%"></i></div></div>' +
       '<div class="actions"><a data-f="' + esc(s.file) + '" data-l="' + s.startLine + '">Open</a><a data-blast="' + esc(s.id) + '">Blast radius</a>' + (s.lastChange ? '<span class="muted mono">' + esc(s.lastChange.hash.slice(0, 7)) + "</span>" : "") + "</div></div>";
   });
@@ -135,7 +139,9 @@ function renderTrace(r, input) {
 }
 
 function aiPrompt(r) {
-  const lines = ["I hit this error:", "", (r.note || "(see stack)"), "", "The Blast-Radius code graph ranks these as the most likely root causes (recency of change × call-graph distance from the crash):"];
+  const lines = ["I hit this error:", "", (r.note || "(see stack)"), ""];
+  if (r.valueOrigin) lines.push("Where the bad value came from: " + r.valueOrigin.summary, "");
+  lines.push( "The Blast-Radius code graph ranks these as the most likely root causes (recency of change × call-graph distance from the crash):");
   r.suspects.slice(0, 5).forEach((s, i) => lines.push((i + 1) + ". " + s.id + " (" + s.file + ":" + s.startLine + "-" + s.endLine + ", " + s.relation + ") — " + s.reasons.map((x) => x.text).join("; ")));
   lines.push("", "Read those functions first, explain the root cause, and propose a minimal fix. Use the blast-radius MCP tools (get_blast_radius) to check what else the fix could break.");
   return lines.join("\\n");

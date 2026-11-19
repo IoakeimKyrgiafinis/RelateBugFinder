@@ -1,6 +1,7 @@
 import { CodeGraph, Row, TEST_FILE_RE } from "./graph";
 import { mapToWorkspace, parseStackTrace } from "./stackTrace";
 import { BlastNode, BlastResult, Suspect, SuspectReason, TraceResult } from "./types";
+import { findValueOrigin, parseNullishError } from "./valueOrigin";
 
 /**
  * Suspect score = recency × proximity, both in [0,1]. Deliberately simple and explainable:
@@ -14,8 +15,10 @@ import { BlastNode, BlastResult, Suspect, SuspectReason, TraceResult } from "./t
  *             1 / (1 + hops)            static caller N hops upstream (max 5)
  *             0.8 / (1 + hops)          callee N hops downstream of the crash site (max 2) — a changed helper often *is* the bug
  *             0.4 × frame proximity     direct callee of another stack frame (its result may have flowed into the crash)
+ *             1.0                       the call that produced the undefined/null value read at the crash site
+ *             0.9                       the caller that passed an undefined/null argument (see valueOrigin.ts)
  */
-export const SCORING = { HALF_LIFE_H: 72, DIRTY: 1.0, FN_COMMIT: 0.9, FILE_COMMIT: 0.35, BASELINE: 0.02, UP_HOPS: 5, DOWN_HOPS: 2, SIBLING: 0.4 };
+export const SCORING = { HALF_LIFE_H: 72, DIRTY: 1.0, FN_COMMIT: 0.9, FILE_COMMIT: 0.35, BASELINE: 0.02, UP_HOPS: 5, DOWN_HOPS: 2, SIBLING: 0.4, ORIGIN: 1.0 };
 
 const now = () => Date.now() / 1000;
 const decay = (ts: number) => Math.pow(0.5, Math.max(0, now() - ts) / 3600 / SCORING.HALF_LIFE_H);
@@ -116,6 +119,33 @@ export function traceSuspects(g: CodeGraph, root: string, traceText: string, lim
     }
   }
 
+  // 2b. Where did the undefined/null come from? Read the crash line and trace the bad value back.
+  const nullish = parseNullishError(parsed.message);
+  const valueOrigin = nullish ? findValueOrigin(root, inWs[0].relPath!, inWs[0].line, inWs[0].col, nullish) : undefined;
+  if (valueOrigin?.source.kind === "call") {
+    const src = valueOrigin.source;
+    const hit = g.q(
+      `MATCH (:Function {id:$id})-[:CALLS]->(d:Function {name:$name})
+       RETURN d.id AS id, d.name AS name, d.file AS file, d.startLine AS startLine, d.endLine AS endLine LIMIT 1`,
+      { id: crash.fn.id, name: src.callee }
+    )[0];
+    if (hit) {
+      const prev = cand.get(hit.id as string);
+      const reason: SuspectReason = { kind: "value-origin", text: `Produced the ${valueOrigin.value} \`${valueOrigin.expression}\` (${crash.fn.file}:${src.line}: ${src.code})` };
+      if (prev) {
+        prev.prox = Math.max(prev.prox, SCORING.ORIGIN);
+        prev.reasons.unshift(reason);
+      } else cand.set(hit.id as string, { fn: hit as unknown as FnRow, relation: "downstream", prox: SCORING.ORIGIN, hops: 1, reasons: [reason] });
+    }
+  } else if (valueOrigin?.source.kind === "param") {
+    // The caller passed the bad value: that's the next frame on the stack.
+    const caller = stackIds[1] && cand.get(stackIds[1]);
+    if (caller) {
+      caller.prox = Math.max(caller.prox, SCORING.ORIGIN * 0.9);
+      caller.reasons.unshift({ kind: "value-origin", text: `Passed ${valueOrigin.value} as \`${valueOrigin.source.param}\` to ${valueOrigin.source.fnName}()` });
+    }
+  }
+
   // 3. Recency signal for every candidate in one query.
   const ids = [...cand.keys()];
   const rec = g.q(
@@ -173,6 +203,7 @@ export function traceSuspects(g: CodeGraph, root: string, traceText: string, lim
     suspects: ranked,
     edges,
     note: parsed.message,
+    valueOrigin,
   };
 }
 

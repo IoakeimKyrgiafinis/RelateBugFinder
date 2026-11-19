@@ -270,8 +270,14 @@ function setupTerminal(ctx: vscode.ExtensionContext) {
       const top = result.suspects[0];
       if (!top) return;
       const why = top.reasons.find((r) => r.kind === "uncommitted" || r.kind === "commit")?.text ?? top.reasons[0]?.text ?? "";
+      const o = result.valueOrigin;
+      const headline = o?.source.kind === "call"
+        ? `💥 "${o.expression}" was ${o.value}: it came from ${o.source.calleeText}()`
+        : o?.source.kind === "param"
+          ? `💥 "${o.expression}" was ${o.value}: the caller passed it in`
+          : `💥 ${(result.note ?? "Command failed").slice(0, 90)}`;
       const pick = await vscode.window.showWarningMessage(
-        `💥 ${(result.note ?? "Command failed").slice(0, 90)} — top suspect: ${top.name} (${top.file}). ${why.slice(0, 80)}`,
+        `${headline} — top suspect: ${top.name} (${top.file}). ${why.slice(0, 80)}`,
         "Show suspects",
         "Open top suspect"
       );

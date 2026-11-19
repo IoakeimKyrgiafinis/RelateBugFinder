@@ -8,3 +8,4 @@ demo-shop
 .vscode/codegraph.bridge.json
 test/state-*.json
 test/panel.html
+test/.value-origin-*.cjs

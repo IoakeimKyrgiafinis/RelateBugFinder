@@ -69,7 +69,7 @@ export interface StackFrame {
 }
 
 export interface SuspectReason {
-  kind: "uncommitted" | "commit" | "file-commit" | "in-stack" | "caller" | "callee";
+  kind: "value-origin" | "uncommitted" | "commit" | "file-commit" | "in-stack" | "caller" | "callee";
   text: string;
 }
 
@@ -93,6 +93,8 @@ export interface TraceResult {
   /** Edges among crash site + suspects, for drawing. */
   edges: { from: string; to: string }[];
   note?: string;
+  /** Where the undefined/null read at the crash site came from, when the error is that kind. */
+  valueOrigin?: import("./valueOrigin").ValueOrigin;
 }
 
 export interface BlastNode {

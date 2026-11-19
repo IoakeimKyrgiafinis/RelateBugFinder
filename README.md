@@ -14,13 +14,17 @@ Built on [Relate by Neo4j](https://relatedb.ai), the embedded graph database. Th
 
 A test fails. The stack trace points at `Cart.total`, which hasn't changed in three weeks. The real cause is `lookupCoupon`, a helper that `Cart.total` calls. Someone changed it three hours ago so it can return `undefined`. It **isn't in the stack trace at all**, because the function already returned before the crash.
 
-Finding it means grepping, `git log -p`, and reading code. Blast Radius finds it straight from the trace:
+Finding it means grepping, `git log -p`, and reading code. Blast Radius finds it straight from the trace. First it reads the crash line and says where the bad value came from:
 
-| # | Suspect | Why |
-|---|---|---|
-| **1** | `lookupCoupon` · `src/coupons.ts:10` | Called by the crash site 1 hop down · **changed 3h ago** in f84b1d8 by Alex Rivera: "Support regional coupon pools" |
-| 2 | `Cart.total` · `src/cart.ts:19` | Error thrown here · last changed 20d ago |
-| 3 | `Cart.summary` | On the stack, frame #2 |
+> **Where the undefined came from:** `coupon` was undefined when reading .pct. It came from lookupCoupon(), at src/cart.ts:22: const coupon = lookupCoupon(couponCode)
+
+Then it ranks the suspects:
+
+| # | Suspect | Score | Why |
+|---|---|---|---|
+| **1** | `lookupCoupon` · `src/coupons.ts:10` | 87.4 | **Produced the undefined `coupon`** · called by the crash site · **changed 3h ago** by Alex Rivera: "Support regional coupon pools" |
+| 2 | `Cart.total` · `src/cart.ts:19` | 2.0 | Error thrown here · last changed 20d ago |
+| 3 | `Cart.summary` | 1.3 | On the stack, frame #2 |
 
 The uncommitted edit in `inventory.ts` is *more recent*, but it is **not ranked**: it isn't connected to the crash in the call graph. Recency alone is noise; recency × graph distance is signal.
 
@@ -32,7 +36,7 @@ Parts of this exist already, and it's worth being precise about which part is ne
 |---|---|---|
 | **Sentry Suspect Commits** | "Who last changed the code *in the stack trace*?" | It only looks at stack frames, so it blames the 3-week-old commit that wrote `Cart.total`. It also works on production errors in a hosted service, after the code has shipped. |
 | **Code-graph MCP servers** (codegraph, code-graph-mcp, Arbor, …) | "What is connected to this function?" (call graphs, impact analysis for agents) | They have the call graph but don't read stack traces or rank by change history. You'd have to ask "what does `Cart.total` call?" and then run `git log` on each result yourself. |
-| **Blast Radius** | "What changed recently *in the code connected to this error*?" | Combines the two: stack frames + call-graph neighbours, weighted by function-level git history. Runs locally, in your editor, while you develop. |
+| **Blast Radius** | "Where did the bad value come from, and what changed recently *in the code connected to this error*?" | Reads the crash line to trace the undefined value to the call that produced it, then combines stack frames + call-graph neighbours, weighted by function-level git history. Runs locally, in your editor, while you develop. |
 
 Blast radius ("what breaks if I change this?") and MCP tools for agents are useful supporting features, but they are not new on their own. The new part is ranking suspects **off the stack** from a trace.
 
@@ -61,6 +65,7 @@ Blast radius ("what breaks if I change this?") and MCP tools for agents are usef
   recency   = 1.0 uncommitted | 0.9·½^(age/72h) function changed | 0.35·½^(age/72h) only file changed | 0.02
   proximity = 1.0 crash site | 1/(1+0.5·i) i-th stack frame | 1/(1+hops) caller ≤5 hops up
             | 0.8/(1+hops) callee of the crash site ≤2 hops down | 0.4 × frame proximity for a direct callee of another frame
+            | 1.0 the call that produced the undefined/null value | 0.9 the caller that passed it as an argument
   ```
 
   Every suspect ships with human-readable reasons, so the ranking is never a black box.
@@ -70,6 +75,7 @@ Blast radius ("what breaks if I change this?") and MCP tools for agents are usef
 | | |
 |---|---|
 | **Auto-trace failed terminal commands** | With VS Code shell integration, when `npm test` / `pytest` / `node app.js` exits with a stack trace, a notification names the top suspect. One click opens the panel. |
+| **Where the undefined came from** | For `Cannot read properties of undefined/null`, Firefox/Safari equivalents and Python `'NoneType' object has no attribute …`, it reads the crash line, finds the expression that was empty (`coupon` in `coupon.pct`) and walks back to what produced it: a call (`const coupon = lookupCoupon(code)`, including destructuring and reassignment), a parameter the caller passed, a field, or an index lookup. The producing function becomes the top-weighted suspect. |
 | **Paste any trace** | `Blast Radius: Trace Error` (Ctrl/Cmd+Alt+T) uses the selection or clipboard. Parses Node/V8, Chrome/Firefox/Vite/webpack URLs, Python tracebacks, pytest, and `tsc` errors. Docker/CI paths are mapped by suffix. |
 | **Blast radius** | CodeLens above every function: `3 callers · 12 transitive · changed 3h ago`. Click it (or Ctrl/Cmd+Alt+B) for transitive callers, importing files and **which test files to run**. |
 | **MCP tools for agents** | `trace_error_suspects`, `get_blast_radius`, `find_recent_suspects`, `find_circular_dependencies`, and `query_codegraph` (read-only Cypher; writes are rejected and rolled back). |
@@ -107,7 +113,7 @@ code .                  # press F5: a new VS Code window opens on demo-shop with
 **Then, in demo-shop:**
 
 1. The status bar (bottom left) shows `20 fns · 20 calls` once indexing finishes (under a second).
-2. In the integrated terminal, run `npm start -- NOPE`. It crashes with `TypeError … reading 'pct'`. A notification names **lookupCoupon** as the top suspect. Click **Show suspects**.
+2. In the integrated terminal, run `npm start -- NOPE`. It crashes with `TypeError … reading 'pct'`. A notification says `"coupon" was undefined: it came from lookupCoupon()` and names it as the top suspect. Click **Show suspects**.
 3. Open `src/money.ts`. Click the CodeLens above `applyDiscount` to see its blast radius and the tests to run.
 4. Copilot agent mode lists the *Blast Radius* MCP tools automatically. For Claude Code or Cursor, run **Blast Radius: Register MCP Server**.
 
@@ -138,6 +144,7 @@ npm test     # builds throwaway demos in your temp folder (never touches ./demo-
              #    panel, CodeLens, incremental re-index, git-commit refresh, MCP through the live bridge
              #  · every MCP tool with VS Code closed, with assertions on the ranking and git history
              #  · that the standalone MCP server never locks the graph file
+             #  · 19 "where did the undefined come from?" cases (TS/JS/Python, V8/Firefox/Safari wording)
 ```
 
 Also verified by hand in real VS Code on Windows 11 (F5 → demo-shop → crash in the terminal → notification → panel).
@@ -158,7 +165,7 @@ code --install-extension dist-vsix/blast-radius-darwin-arm64.vsix
 * Call resolution is syntactic (no type checker), for speed on every save. It resolves local functions, imports (named, default, namespace, CommonJS, re-exports, Python relative and absolute), `this.`/`self.` methods, and `new X()`. Unknown-receiver calls (`obj.method()`) link only when the method name is unique, and those edges carry `heuristic: true`.
 * Line mapping for older commits drifts as later edits shift lines. Recency weighting keeps that harmless in practice.
 * No source-map support yet: `dist/x.js` frames fall back to `src/x.ts` by name. ts-node, tsx, vitest, jest and Node type-stripping already print TS positions.
-* No dataflow analysis: off-stack suspects come from call structure plus history, not from tracking where the bad value came from. A changed helper that's connected but innocent can still rank high; its reasons say why it was picked.
+* Value tracing is syntactic and stays inside the crashing function: it follows declarations, reassignments, destructuring and parameters, but not values that pass through other variables, closures or object fields set at runtime (fields are explained, not resolved). It runs only for undefined/null/None errors. Other off-stack suspects come from call structure plus history, so a changed helper that's connected but innocent can still rank high; its reasons say why it was picked.
 * Single-root workspaces (first folder), and one VS Code window per folder (Relate allows one writer per graph file).
 
 ## Built with: Relate capabilities, third-party tools and AI use
