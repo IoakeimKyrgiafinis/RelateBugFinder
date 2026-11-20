@@ -28,6 +28,10 @@ Then it ranks the suspects:
 
 The uncommitted edit in `inventory.ts` is *more recent*, but it is **not ranked**: it isn't connected to the crash in the call graph. Recency alone is noise; recency × graph distance is signal.
 
+**When the bad value came from a function that already returned, Deep trace finds it.** In the demo's Python test, `validate` raises `negative total: -10.000000000000014`, and the helper that was changed yesterday, `bulk_discount`, ranks only #3 from the trace alone. One click re-runs the test with a recorder. `bulk_discount` returned exactly that value, so it moves to #1, and the panel shows the lines that ran only in the failing test:
+
+![Deep trace panel](media/screenshot-deep.png)
+
 ## How it differs from existing tools
 
 Parts of this exist already, and it's worth being precise about which part is new.
@@ -88,6 +92,8 @@ Blast radius ("what breaks if I change this?") and MCP tools for agents are usef
 | **MCP tools for agents** | `trace_error_suspects`, `get_blast_radius`, `find_recent_suspects`, `find_circular_dependencies`, and `query_codegraph` (read-only Cypher; writes are rejected and rolled back). |
 | **Zero-config Copilot** | Registered through VS Code's MCP provider API, so Copilot agent mode sees the tools immediately. `Relate Bug Finder: Register MCP Server` writes `.mcp.json` (Claude Code) and `.cursor/mcp.json`. |
 | **"Ask AI to fix"** | Sends the ranked suspects plus reasons to your chat as a ready-made prompt. |
+
+![Blast radius of applyDiscount](media/screenshot-blast.png)
 
 ### Why the MCP server talks to the extension
 

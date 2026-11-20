@@ -149,6 +149,7 @@ const ctx = { subscriptions: [], extensionPath: path.join(__dirname, ".."), exte
   const bd3 = s3.result.suspects.find((s) => shortName(s) === "bulk_discount");
   assert.ok(bd3.reasons.some((r) => /none of the 1 related passing test/.test(r.text)), "bulk_discount should say it ran in no passing test");
   ok(`Compare (confirmed, ran: ${confirm2.text.split("\n").filter((l) => l.includes("unittest")).join("; ")}): ${s3.result.suspects.slice(0, 4).map((s) => `${shortName(s)} ${s.score}`).join(", ")}`);
+  fs.writeFileSync(path.join(__dirname, "state-deep.json"), JSON.stringify(s3)); // for README screenshots (test/render-panel.cjs)
   ui = await renderPanel(panel, s3);
   assert.ok(!ui.doc.getElementById("sbfl"), "Compare button should be gone after comparing");
   ok(`panel box: "${ui.doc.querySelector(".origin").textContent.match(/Compared with[^)]*[)]/)[0]}"`);

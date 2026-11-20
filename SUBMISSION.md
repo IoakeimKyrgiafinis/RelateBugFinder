@@ -10,6 +10,7 @@
 - [ ] **Demo video ≤ 2 minutes**, recorded and edited by you, viewable without a login (YouTube unlisted works). Shot list: `demo/VIDEO_SCRIPT.md`. Use only music you have rights to. Run `npm run demo` again just before recording, so the "3h ago" is fresh.
 - [ ] **Statement of Relate capabilities, third-party tools and AI tools**: README "Built with" section. **Check the AI paragraph so it's accurate.**
 - [x] Repo URL filled in README.md and package.json (`IoakeimKyrgiafinis/RelateBugFinder`)
+- [x] **Screenshots** for the Devpost gallery: `media/screenshot-trace.png`, `media/screenshot-deep.png`, `media/screenshot-blast.png` (the real panel HTML from the tests, rendered in headless Chrome with VS Code's Dark+ colours)
 - [ ] Submit before **Fri Dec 11, 2026, 6:00 PM PST** (= Sat Dec 12, 04:00 Athens time)
 
 One-time publish (GitHub CLI; the 5 VSIX files are already built in `dist-vsix/`):
