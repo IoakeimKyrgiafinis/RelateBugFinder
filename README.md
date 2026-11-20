@@ -117,6 +117,8 @@ npm run demo            # creates ./demo-shop with a bug hidden in git history
 code .                  # press F5: a new VS Code window opens on demo-shop with the extension loaded
 ```
 
+npm 11 may warn that some packages' install scripts were not run (esbuild, koffi, vsce-sign). You can ignore it: the prebuilt binaries are used, and the build and all tests pass that way.
+
 **Then, in demo-shop:**
 
 1. The status bar (bottom left) shows `26 fns · 25 calls` once indexing finishes (under a second).
