@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Re-weight Blast Radius offline from the per-candidate signals that bench/rescore.mjs saved
+// Re-weight Relate Bug Finder offline from the per-candidate signals that bench/rescore.mjs saved
 // (../bench-cache/features), and pick weights on a DEV half of the bugs only. The HELD-OUT half
 // is reported but never used for choosing, so its numbers are an honest estimate.
 //

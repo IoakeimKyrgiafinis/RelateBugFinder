@@ -13,7 +13,7 @@ const run = (args, label) => {
   execFileSync("node", args, { cwd: repo, stdio: "inherit" });
 };
 const fresh = () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "blast-radius-test-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relate-bug-finder-test-"));
   execFileSync("node", [path.join(repo, "demo", "setup-demo.mjs"), dir], { stdio: "pipe" });
   return dir;
 };

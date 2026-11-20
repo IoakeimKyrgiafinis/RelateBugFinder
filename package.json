@@ -1,5 +1,5 @@
 {
-  "name": "blast-radius",
+  "name": "relate-bug-finder",
   "version": "0.1.0",
   "description": "Click a stack trace, get the ranked root-cause suspects. See who breaks before you refactor. A live code graph on Neo4j Relate, exposed to Copilot/Claude/Cursor over MCP.",
   "main": "./dist/extension.js",
@@ -38,7 +38,7 @@
     "@modelcontextprotocol/sdk": "^1.32.2",
     "zod": "^4.6.7"
   },
-  "displayName": "Blast Radius — Error Trace & Impact Graph",
+  "displayName": "Relate Bug Finder — Error Trace & Impact Graph",
   "publisher": "ioakeimkyrgiafinis",
   "engines": {
     "vscode": "^1.101.0",
@@ -50,8 +50,8 @@
     "AI"
   ],
   "bin": {
-    "blast-radius": "./dist/cli.js",
-    "blast-radius-mcp": "./dist/mcp.js"
+    "relate-bug-finder": "./dist/cli.js",
+    "relate-bug-finder-mcp": "./dist/mcp.js"
   },
   "activationEvents": [
     "workspaceContains:**/*.{ts,tsx,js,jsx,py}",
@@ -60,95 +60,95 @@
   "contributes": {
     "commands": [
       {
-        "command": "blastRadius.traceError",
+        "command": "relateBugFinder.traceError",
         "title": "Trace Error: Find Root-Cause Suspects",
-        "category": "Blast Radius",
+        "category": "Relate Bug Finder",
         "icon": "$(debug-alt)"
       },
       {
-        "command": "blastRadius.blastRadius",
+        "command": "relateBugFinder.blastRadius",
         "title": "Show Blast Radius of Function at Cursor",
-        "category": "Blast Radius",
+        "category": "Relate Bug Finder",
         "icon": "$(references)"
       },
       {
-        "command": "blastRadius.showPanel",
+        "command": "relateBugFinder.showPanel",
         "title": "Open Panel",
-        "category": "Blast Radius"
+        "category": "Relate Bug Finder"
       },
       {
-        "command": "blastRadius.reindex",
+        "command": "relateBugFinder.reindex",
         "title": "Re-index Workspace",
-        "category": "Blast Radius"
+        "category": "Relate Bug Finder"
       },
       {
-        "command": "blastRadius.setupMcp",
+        "command": "relateBugFinder.setupMcp",
         "title": "Register MCP Server for Claude Code / Cursor",
-        "category": "Blast Radius"
+        "category": "Relate Bug Finder"
       },
       {
-        "command": "blastRadius.showLog",
+        "command": "relateBugFinder.showLog",
         "title": "Show Log",
-        "category": "Blast Radius"
+        "category": "Relate Bug Finder"
       }
     ],
     "menus": {
       "editor/context": [
         {
-          "command": "blastRadius.blastRadius",
+          "command": "relateBugFinder.blastRadius",
           "group": "navigation@9",
           "when": "editorLangId =~ /typescript|javascript|python/"
         },
         {
-          "command": "blastRadius.traceError",
+          "command": "relateBugFinder.traceError",
           "group": "navigation@10",
           "when": "editorHasSelection"
         }
       ],
       "editor/title": [
         {
-          "command": "blastRadius.traceError",
+          "command": "relateBugFinder.traceError",
           "group": "navigation"
         }
       ]
     },
     "keybindings": [
       {
-        "command": "blastRadius.traceError",
+        "command": "relateBugFinder.traceError",
         "key": "ctrl+alt+t",
         "mac": "cmd+alt+t"
       },
       {
-        "command": "blastRadius.blastRadius",
+        "command": "relateBugFinder.blastRadius",
         "key": "ctrl+alt+b",
         "mac": "cmd+alt+b",
         "when": "editorTextFocus"
       }
     ],
     "configuration": {
-      "title": "Blast Radius",
+      "title": "Relate Bug Finder",
       "properties": {
-        "blastRadius.autoTraceTerminal": {
+        "relateBugFinder.autoTraceTerminal": {
           "type": "boolean",
           "default": true,
           "description": "When a terminal command fails with a stack trace, rank root-cause suspects automatically."
         },
-        "blastRadius.codeLens": {
+        "relateBugFinder.codeLens": {
           "type": "boolean",
           "default": true,
           "description": "Show caller counts and recent-change markers above functions."
         },
-        "blastRadius.maxSuspects": {
+        "relateBugFinder.maxSuspects": {
           "type": "number",
           "default": 10,
           "description": "Suspects to show per trace."
         },
-        "blastRadius.gitHistoryDays": {
+        "relateBugFinder.gitHistoryDays": {
           "type": "number",
           "default": 30,
           "description": "How far back to read git history."
         },
-        "blastRadius.pythonPath": {
+        "relateBugFinder.pythonPath": {
           "type": "string",
           "default": "",
           "description": "Python executable for indexing .py files (default: python3 / python)."
@@ -157,8 +157,8 @@
     },
     "mcpServerDefinitionProviders": [
       {
-        "id": "blastRadius.mcp",
-        "label": "Blast Radius code graph"
+        "id": "relateBugFinder.mcp",
+        "label": "Relate Bug Finder code graph"
       }
     ]
   },

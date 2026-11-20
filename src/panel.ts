@@ -45,7 +45,7 @@ export class BlastPanel {
   }
 
   private constructor(extUri: vscode.Uri, onMsg: (m: PanelMsg) => void, private panel = vscode.window.createWebviewPanel(
-    "blastRadius", "Blast Radius", { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
+    "relateBugFinder", "Relate Bug Finder", { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
     { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [extUri] }
   )) {
     panel.iconPath = vscode.Uri.joinPath(extUri, "media", "icon.svg");
@@ -61,7 +61,7 @@ export class BlastPanel {
 
   update(state: PanelState) {
     this.state = state;
-    this.panel.title = state.mode === "trace" ? "Blast Radius · Error trace" : state.mode === "blast" ? `Blast Radius · ${state.result.target.name}` : "Blast Radius";
+    this.panel.title = state.mode === "trace" ? "Relate Bug Finder · Error trace" : state.mode === "blast" ? `Relate Bug Finder · ${state.result.target.name}` : "Relate Bug Finder";
     this.post();
   }
 
@@ -137,8 +137,8 @@ vscode.postMessage({ type: "ready" });
 function render(s) {
   if (s.mode === "trace") return renderTrace(s.result, s.input, s);
   if (s.mode === "blast") return renderBlast(s.result);
-  if (s.mode === "error") { app.innerHTML = '<h1>Blast Radius</h1><div class="err">' + esc(s.message) + "</div>" + pasteBox(""); return bindPaste(); }
-  app.innerHTML = '<h1>Blast Radius</h1><p class="muted">Paste an error or stack trace (Node, browser, Python, pytest, tsc). Failed commands in the integrated terminal are traced automatically.</p>' +
+  if (s.mode === "error") { app.innerHTML = '<h1>Relate Bug Finder</h1><div class="err">' + esc(s.message) + "</div>" + pasteBox(""); return bindPaste(); }
+  app.innerHTML = '<h1>Relate Bug Finder</h1><p class="muted">Paste an error or stack trace (Node, browser, Python, pytest, tsc). Failed commands in the integrated terminal are traced automatically.</p>' +
     pasteBox(s.clipboard || "") + (s.stats ? '<h2>Graph</h2><p class="mono">' + Object.entries(s.stats).map(([k, v]) => esc(k) + ": " + esc(v)).join(" · ") + "</p>" : "");
   bindPaste();
 }
@@ -184,14 +184,14 @@ function renderTrace(r, input, s) {
 function aiPrompt(r) {
   const lines = ["I hit this error:", "", (r.note || "(see stack)"), ""];
   if (r.valueOrigin) lines.push("Where the bad value came from: " + r.valueOrigin.summary, "");
-  lines.push( "The Blast-Radius code graph ranks these as the most likely root causes (recency of change × call-graph distance from the crash):");
+  lines.push( "The Relate Bug Finder code graph ranks these as the most likely root causes (recency of change × call-graph distance from the crash):");
   r.suspects.slice(0, 5).forEach((s, i) => {
     const L = hlLines(s);
     const only = !!(s.lines && s.lines.failingOnly && s.lines.failingOnly.length);
     lines.push((i + 1) + ". " + s.id + " (" + s.file + ":" + s.startLine + "-" + s.endLine + ", " + s.relation + ") — " + s.reasons.map((x) => x.text).join("; ") +
       (L && L.length ? (only ? ". Lines that ran only in the failing test: " : ". Lines that ran in the failing test: ") + L.join(", ") : ""));
   });
-  lines.push("", "Read those functions first, explain the root cause, and propose a minimal fix. Use the blast-radius MCP tools (get_blast_radius) to check what else the fix could break.");
+  lines.push("", "Read those functions first, explain the root cause, and propose a minimal fix. Use the relate-bug-finder MCP tools (get_blast_radius) to check what else the fix could break.");
   return lines.join("\\n");
 }
 

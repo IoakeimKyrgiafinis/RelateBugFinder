@@ -1,9 +1,9 @@
-Blast Radius for VS Code, built for the **Neo4j Relate Hackathon 2026**.
+Relate Bug Finder for VS Code, built for the **Neo4j Relate Hackathon 2026**.
 
 **Install** (pick your platform: `win32-x64`, `darwin-arm64` = Apple Silicon, `darwin-x64`, `linux-x64`, `linux-arm64`):
 
 ```
-code --install-extension blast-radius-<platform>.vsix
+code --install-extension relate-bug-finder-<platform>.vsix
 ```
 
 Then follow the README's **"Try it in 3 minutes"** to create the demo project (`node demo/setup-demo.mjs demo-shop`) and walk through both scenes: the TypeScript crash whose cause is off the stack, and the Python test where Deep trace finds the function that returned the bad value.

@@ -1,4 +1,4 @@
-# Blast Radius — Error Trace & Impact Graph for VS Code
+# Relate Bug Finder — Error Trace & Impact Graph for VS Code
 
 **Click a stack trace → get the ranked list of functions that most likely caused it, including the ones that aren't on the stack.**
 **Before a refactor → see every caller, importer and test that will feel it.**
@@ -14,7 +14,7 @@ Built on [Relate by Neo4j](https://relatedb.ai), the embedded graph database. Th
 
 A test fails. The stack trace points at `Cart.total`, which hasn't changed in three weeks. The real cause is `lookupCoupon`, a helper that `Cart.total` calls. Someone changed it three hours ago so it can return `undefined`. It **isn't in the stack trace at all**, because the function already returned before the crash.
 
-Finding it means grepping, `git log -p`, and reading code. Blast Radius finds it straight from the trace. First it reads the crash line and says where the bad value came from:
+Finding it means grepping, `git log -p`, and reading code. Relate Bug Finder finds it straight from the trace. First it reads the crash line and says where the bad value came from:
 
 > **Where the undefined came from:** `coupon` was undefined when reading .pct. It came from lookupCoupon(), at src/cart.ts:22: const coupon = lookupCoupon(couponCode)
 
@@ -36,7 +36,7 @@ Parts of this exist already, and it's worth being precise about which part is ne
 |---|---|---|
 | **Sentry Suspect Commits** | "Who last changed the code *in the stack trace*?" | It only looks at stack frames, so it blames the 3-week-old commit that wrote `Cart.total`. It also works on production errors in a hosted service, after the code has shipped. |
 | **Code-graph MCP servers** (codegraph, code-graph-mcp, Arbor, …) | "What is connected to this function?" (call graphs, impact analysis for agents) | They have the call graph but don't read stack traces or rank by change history. You'd have to ask "what does `Cart.total` call?" and then run `git log` on each result yourself. |
-| **Blast Radius** | "Where did the bad value come from, and what changed recently *in the code connected to this error*?" | Reads the crash line to trace the undefined value to the call that produced it, then combines stack frames + call-graph neighbours, weighted by function-level git history. Runs locally, in your editor, while you develop. |
+| **Relate Bug Finder** | "Where did the bad value come from, and what changed recently *in the code connected to this error*?" | Reads the crash line to trace the undefined value to the call that produced it, then combines stack frames + call-graph neighbours, weighted by function-level git history. Runs locally, in your editor, while you develop. |
 
 Blast radius ("what breaks if I change this?") and MCP tools for agents are useful supporting features, but they are not new on their own. The new part is ranking suspects **off the stack** from a trace.
 
@@ -83,10 +83,10 @@ Blast radius ("what breaks if I change this?") and MCP tools for agents are usef
 | **Deep trace** (opt-in) | When the crash came from a terminal command, the panel offers to re-run it with a recorder attached (Python: a `sitecustomize` hook on `PYTHONPATH` using `sys.monitoring` on 3.12+ and `sys.setprofile`/`sys.settrace` before that, no install, project code only; Node: built-in `NODE_V8_COVERAGE`). Which of your functions ran, how often, how close to the crash, which of their lines ran, and (Python) a safe summary of what they returned is stored as a `(:Run)` in Relate. Functions that ran just before the crash rank higher, and helpers that already returned (never on the stack) can join the suspects. **Who produced the bad value:** when the error names a value (an assertion's actual result such as `-10.0 != 90`, a number or key in the message, or `None`), the function that returned it first moves up. It always asks first, showing the exact command. It re-runs the way your terminal did: in the same shell (PowerShell, bash, …) and with your project's Python environment (VS Code's selected interpreter, or a `.venv`/`venv` in the project), and it can be cancelled. It works alongside coverage tools (`pytest --cov`) and debuggers: on Python 3.12+ through `sys.monitoring`; on older Pythons, calls and return values are still recorded if another tool takes over line tracing, and the panel says so. |
 | **Lines, not just functions** | After a deep trace each suspect lists the lines that ran in the failing test; after comparing with passing tests, the lines that ran *only* in the failing test. Clicking highlights them in the editor. |
 | **Compare with related passing tests** (opt-in, Python) | After a deep trace, Cypher picks the test functions that call the code that ran just before the crash, runs them the same way (pytest or unittest) with the recorder, and stores them in the same session. Ochiai's spectrum score, computed in Cypher, then lowers functions that also run in passing tests. |
-| **Paste any trace** | `Blast Radius: Trace Error` (Ctrl/Cmd+Alt+T) uses the selection or clipboard. Parses Node/V8, Chrome/Firefox/Vite/webpack URLs, Python tracebacks, pytest, and `tsc` errors. Docker/CI paths are mapped by suffix. |
+| **Paste any trace** | `Relate Bug Finder: Trace Error` (Ctrl/Cmd+Alt+T) uses the selection or clipboard. Parses Node/V8, Chrome/Firefox/Vite/webpack URLs, Python tracebacks, pytest, and `tsc` errors. Docker/CI paths are mapped by suffix. |
 | **Blast radius** | CodeLens above every function: `3 callers · 12 transitive · changed 3h ago`. Click it (or Ctrl/Cmd+Alt+B) for transitive callers, importing files and **which test files to run**. |
 | **MCP tools for agents** | `trace_error_suspects`, `get_blast_radius`, `find_recent_suspects`, `find_circular_dependencies`, and `query_codegraph` (read-only Cypher; writes are rejected and rolled back). |
-| **Zero-config Copilot** | Registered through VS Code's MCP provider API, so Copilot agent mode sees the tools immediately. `Blast Radius: Register MCP Server` writes `.mcp.json` (Claude Code) and `.cursor/mcp.json`. |
+| **Zero-config Copilot** | Registered through VS Code's MCP provider API, so Copilot agent mode sees the tools immediately. `Relate Bug Finder: Register MCP Server` writes `.mcp.json` (Claude Code) and `.cursor/mcp.json`. |
 | **"Ask AI to fix"** | Sends the ranked suspects plus reasons to your chat as a ready-made prompt. |
 
 ### Why the MCP server talks to the extension
@@ -100,7 +100,7 @@ Relate allows **one writer per `.rl` file**, and the extension holds it. The MCP
 **Option A: install the prebuilt extension (no build step)**
 
 1. Download the `.vsix` for your platform from [Releases](https://github.com/IoakeimKyrgiafinis/RelateBugFinder/releases) (`darwin-arm64` = Apple Silicon, `darwin-x64`, `win32-x64`, `linux-x64`, `linux-arm64`).
-2. `code --install-extension blast-radius-<platform>.vsix`
+2. `code --install-extension relate-bug-finder-<platform>.vsix`
 3. Create the demo project and open it:
    ```bash
    git clone https://github.com/IoakeimKyrgiafinis/RelateBugFinder && cd RelateBugFinder
@@ -125,9 +125,9 @@ npm 11 may warn that some packages' install scripts were not run (esbuild, koffi
 2. **Off the stack, instantly.** In the integrated terminal, run `npm start -- NOPE`. It crashes with `TypeError … reading 'pct'`. A notification says `"coupon" was undefined: it came from lookupCoupon()` and names it as the top suspect. Click **Show suspects**.
 3. **Deep trace** (Python). Run `python -m unittest tests.test_orders.OrdersTest.test_bulk_order`. It fails with `ValueError: negative total: -10.000000000000014`, raised in `validate`. Show suspects: the changed helper `bulk_discount` is only #3, because it already returned. Click **Deep trace**, then confirm. The test re-runs with the recorder (under a second) and `bulk_discount` moves to **#1**: it *returned `-10.000000000000014`, the value in the error, before any other function did*. Click **Compare with related passing tests**: `test_small_order` passes without ever calling it, and `order_total` shows line 22 (`total = bulk_discount(total)`) as the only line that ran only in the failing test. Click it to see it highlighted.
 4. **Blast radius.** Open `src/money.ts`. Click the CodeLens above `applyDiscount` to see its blast radius and the tests to run.
-5. **Agents.** Copilot agent mode lists the *Blast Radius* MCP tools automatically. For Claude Code or Cursor, run **Blast Radius: Register MCP Server**.
+5. **Agents.** Copilot agent mode lists the *Relate Bug Finder* MCP tools automatically. For Claude Code or Cursor, run **Relate Bug Finder: Register MCP Server**.
 
-No shell integration in your terminal? Copy the error output and run **Blast Radius: Trace Error** (Ctrl/Cmd+Alt+T), which reads the clipboard.
+No shell integration in your terminal? Copy the error output and run **Relate Bug Finder: Trace Error** (Ctrl/Cmd+Alt+T), which reads the clipboard.
 
 CLI (same engine, no VS Code):
 
@@ -142,7 +142,7 @@ node dist/cli.js cypher demo-shop "MATCH (c:Commit)-[:TOUCHED]->(f) RETURN c.aut
 MCP for Claude Code from a terminal:
 
 ```bash
-claude mcp add blast-radius -- node /abs/path/RelateBugFinder/dist/mcp.js --root /abs/path/your-project
+claude mcp add relate-bug-finder -- node /abs/path/RelateBugFinder/dist/mcp.js --root /abs/path/your-project
 ```
 
 ## Tests
@@ -182,7 +182,7 @@ Weights were chosen on a fixed half of the bugs (`bench/tune.mjs`). On the **oth
 
 | Method | Top 1 | Top 3 | MRR |
 |---|---|---|---|
-| **Blast Radius** (trace only, instant) | **31%** | **39%** | **0.35** |
+| **Relate Bug Finder** (trace only, instant) | **31%** | **39%** | **0.35** |
 | **+ Deep trace** (one recorded re-run of the failing test) | **44%** | **54%** | **0.53** |
 | **+ related passing tests** (spectrum, after a deep trace) | **46%** | **56%** | **0.54** |
 | Read the stack top-down | 20% | 27% | 0.23 |
@@ -193,7 +193,7 @@ Where the gain comes from (all 114 bugs, full tables in [bench/RESULTS.md](bench
 
 * **Failing assertions** (a test's `assert` fails, n = 70): the right function is #1 in 24% of bugs, vs 6% for reading the stack. The stack ends in the test, so the useful suspects are the code the test called that changed recently.
 * **Crashes** (n = 44): a little better than reading the stack (top 1: 48% vs 43%, top 3: 61% vs 57%). The stack is already a strong signal here.
-* **Crashes fixed somewhere off the stack** (n = 18): Blast Radius gets 3 into the top 3, and no baseline gets any. Each comes from a link read from the error itself:
+* **Crashes fixed somewhere off the stack** (n = 18): Relate Bug Finder gets 3 into the top 3, and no baseline gets any. Each comes from a link read from the error itself:
   * thefuck:12, `module … does not have the attribute 'which'` → the module's functions → `match` is #1.
   * scrapy:19, `'WrappedRequest' object has no attribute 'full_url'` → the class's other methods → #2.
   * tqdm:5, `'tqdm' object has no attribute 'total'` → the method that sets `self.total` → `__init__` is #2.
@@ -223,7 +223,7 @@ Where the gain comes from (all 114 bugs, full tables in [bench/RESULTS.md](bench
 
 This is not pinpointing: it means the fixed line is among the ~9 highlighted lines, which you still read. The buggy line almost always runs in a failing test, so most of the 94% comes from that; the value is the narrowing, to about a third of the function, rarely hiding the fix. The failing-only list is sharper but rare, because related passing tests seldom run the same function down a different path.
 
-**Tried and not shipped: "the newest change that ran wins".** When the crash site is old and a helper that ran just before it was changed a minute ago, a developer suspects the helper; Blast Radius still ranks the crash site higher, because closeness to the crash outweighs recency. A bonus for the most recently changed function that ran didn't help on real bugs (held-out MRR 0.534 → 0.535). The fixed function is that newest change in 29 of 113 bugs, but 23 of those already rank in the top 3, and in 37 others the newest change is the wrong function, which the bonus would push up. What did fix that case is the returned-values signal above: when the helper returned the value the error names, it is the producer of the bad value, which is a more specific signal than recency.
+**Tried and not shipped: "the newest change that ran wins".** When the crash site is old and a helper that ran just before it was changed a minute ago, a developer suspects the helper; Relate Bug Finder still ranks the crash site higher, because closeness to the crash outweighs recency. A bonus for the most recently changed function that ran didn't help on real bugs (held-out MRR 0.534 → 0.535). The fixed function is that newest change in 29 of 113 bugs, but 23 of those already rank in the top 3, and in 37 others the newest change is the wrong function, which the bonus would push up. What did fix that case is the returned-values signal above: when the helper returned the value the error names, it is the producer of the bad value, which is a more specific signal than recency.
 
 **Cost of recording** ([bench/OVERHEAD.md](bench/OVERHEAD.md), `node bench/overhead.mjs`). Re-running the failing test with the recorder takes a median **1.6×** as long (worst 2.0×; a 1 s test takes ~1.6 s). A whole test file: median 1.7×, worst 5.1× (Black, CPU-heavy). On Python 3.12+ (`sys.monitoring`), recording the *entire* standard library as if it were project code: median 3.2×, worst 12×. Each line is reported once and then switched off, so loops cost nothing extra; the remaining cost is recording every call and return of very hot functions. Re-running one failing test, which is what the panel offers, keeps it to seconds.
 
@@ -234,8 +234,8 @@ Reproduce: `node bench/bugsinpy.mjs --jobs 4` (needs `uv`; downloads the project
 Relate ships its native engine per platform, so build one VSIX per target:
 
 ```bash
-npm run package:all     # dist-vsix/blast-radius-{darwin-arm64,darwin-x64,linux-x64,linux-arm64,win32-x64}.vsix
-code --install-extension dist-vsix/blast-radius-darwin-arm64.vsix
+npm run package:all     # dist-vsix/relate-bug-finder-{darwin-arm64,darwin-x64,linux-x64,linux-arm64,win32-x64}.vsix
+code --install-extension dist-vsix/relate-bug-finder-darwin-arm64.vsix
 ```
 
 ## Limits (v1, honest)

@@ -25,7 +25,7 @@ It creates the public repo `RelateBugFinder` with a description starting "Neo4j-
 
 ## Title
 
-**Blast Radius: from stack trace to root cause in one click, with a code graph your AI can query**
+**Relate Bug Finder: from stack trace to root cause in one click, with a code graph your AI can query**
 
 ## Tagline (≤ 200 chars)
 
@@ -33,9 +33,9 @@ Click a stack trace in VS Code and get the functions that most likely caused it,
 
 ## What it does
 
-Blast Radius is a VS Code extension. It keeps a live graph of your codebase in an embedded Relate database: files, functions, imports, calls, and git history down to the individual function.
+Relate Bug Finder is a VS Code extension. It keeps a live graph of your codebase in an embedded Relate database: files, functions, imports, calls, and git history down to the individual function.
 
-- **Error → root cause.** When a terminal command fails with a stack trace, Blast Radius ranks the likely culprits by *recency of change × distance in the call graph*, and says why for each one. That catches bugs that aren't on the stack at all. In our demo, a crash in `Cart.total` is really caused by a helper it called, `lookupCoupon`, which a teammate changed 3 hours ago. That helper already returned, so it isn't on the stack. Blast Radius reads the crash line (`coupon.pct`), traces `coupon` back to `const coupon = lookupCoupon(couponCode)`, ranks `lookupCoupon` #1 and says why. The same value tracing works for Python's `'NoneType' object has no attribute …`.
+- **Error → root cause.** When a terminal command fails with a stack trace, Relate Bug Finder ranks the likely culprits by *recency of change × distance in the call graph*, and says why for each one. That catches bugs that aren't on the stack at all. In our demo, a crash in `Cart.total` is really caused by a helper it called, `lookupCoupon`, which a teammate changed 3 hours ago. That helper already returned, so it isn't on the stack. Relate Bug Finder reads the crash line (`coupon.pct`), traces `coupon` back to `const coupon = lookupCoupon(couponCode)`, ranks `lookupCoupon` #1 and says why. The same value tracing works for Python's `'NoneType' object has no attribute …`.
 - **Deep trace (opt-in).** One click re-runs the failing command with a recorder attached, after showing the exact command. Python uses a small stdlib-only hook (`sys.monitoring` on 3.12+, `sys.setprofile`/`settrace` before), limited to project code; Node uses its built-in V8 coverage. Nothing to install. It records what ran, how often, how close to the crash, which lines ran and what each function returned, and stores it in the graph as a `(:Run)`. Functions that ran just before the crash rank higher. When the error names a value (`-10.0 != 90`, `negative total: -10.0`, `None`), the function that returned it first moves up: the producer of the bad value, even though it is long off the stack. In the demo's Python scene, the changed helper `bulk_discount` goes from #3 to #1 this way. Each suspect lists the lines that ran, and the editor highlights them. It re-runs the way your terminal did, in the same shell and with your project's Python environment, and it can be cancelled.
 - **Compare with passing tests (Python).** The call graph picks related tests, which run the same way. Functions that also run in passing tests rank lower (spectrum-based fault localization, computed in Cypher), and each suspect shows the lines that ran only in the failing test.
 - **Before a refactor → blast radius.** CodeLens above every function shows its callers and recent changes. One click shows transitive callers, importing files, and the exact test files to run.
@@ -71,11 +71,11 @@ Every developer hits this several times a day: something broke, and the stack tr
   |---|---|---|---|
   | Reading the stack top-down | 20% | 27% | 0.23 |
   | Sentry-style (stack frames, newest change first) | 22% | 27% | 0.24 |
-  | **Blast Radius, instant (trace only)** | **31%** | **39%** | **0.35** |
+  | **Relate Bug Finder, instant (trace only)** | **31%** | **39%** | **0.35** |
   | **+ Deep trace** (one recorded re-run) | **44%** | **54%** | **0.53** |
   | **+ related passing tests** | **46%** | **56%** | **0.54** |
 
-- **Where it matters most** (all 114 bugs). On failing assertions (n = 70), where the stack ends in the test, reading the stack gets the right function first in 6% of bugs; Blast Radius with Deep trace gets 46%, and 47% after comparing with passing tests. On crashes fixed somewhere off the stack (n = 18), every baseline gets 0; with Deep trace and passing tests, Blast Radius gets 4 at #1 and 5 in the top 3.
+- **Where it matters most** (all 114 bugs). On failing assertions (n = 70), where the stack ends in the test, reading the stack gets the right function first in 6% of bugs; Relate Bug Finder with Deep trace gets 46%, and 47% after comparing with passing tests. On crashes fixed somewhere off the stack (n = 18), every baseline gets 0; with Deep trace and passing tests, Relate Bug Finder gets 4 at #1 and 5 in the top 3.
 - **Lines, honestly.** The lines the panel highlights (about 9 of a function's 29) include a line the real fix changed in 94% of bugs. It narrows the reading; it doesn't pinpoint.
 - **Cheap enough to click.** Recording costs a median 1.6× the test's normal run time (`bench/OVERHEAD.md`).
 - **It works on real code:** zod (525 files, 3,030 functions, 3,255 call edges) fully indexes in 2.9 s. Graph queries take 1–30 ms.

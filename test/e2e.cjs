@@ -1,7 +1,7 @@
 /* End-to-end test of dist/extension.js against a mocked `vscode` API.
  * Usage: node test/e2e.cjs <demo-workspace> <node-trace-file>
  * Exercises: activation + full index, terminal auto-trace, panel messaging, CodeLens,
- * blast-radius command, incremental re-index on save, git commit refresh, MCP bridge. */
+ * relate-bug-finder command, incremental re-index on save, git commit refresh, MCP bridge. */
 const Module = require("module");
 const path = require("path");
 const fs = require("fs");
@@ -132,7 +132,7 @@ const ok = (m) => console.log("  ✓ " + m);
   ok("terminal error line becomes a clickable link");
 
   // Blast radius command (as invoked by CodeLens)
-  await handlers.commands.get("blastRadius.blastRadius")("src/money.ts#applyDiscount");
+  await handlers.commands.get("relateBugFinder.blastRadius")("src/money.ts#applyDiscount");
   const blastState = await until(() => panel.posted.find((m) => m.mode === "blast"), 3000, "blast state");
   ok(`blast radius: ${blastState.result.summary}`);
   fs.writeFileSync(path.join(__dirname, "state-blast.json"), JSON.stringify(blastState));

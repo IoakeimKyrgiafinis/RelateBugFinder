@@ -16,7 +16,7 @@ let ws: Workspace | undefined;
 let graph: CodeGraph | undefined;
 let root = "";
 let ready = false;
-const out = vscode.window.createOutputChannel("Blast Radius");
+const out = vscode.window.createOutputChannel("Relate Bug Finder");
 const log = (m: string) => out.appendLine(`[${new Date().toLocaleTimeString()}] ${m}`);
 const changed = new vscode.EventEmitter<void>();
 
@@ -29,15 +29,15 @@ function serial<T>(fn: () => Promise<T> | T): Promise<T> {
 }
 
 const rel = (uri: vscode.Uri) => path.relative(root, uri.fsPath).split(path.sep).join("/");
-const cfg = () => vscode.workspace.getConfiguration("blastRadius");
+const cfg = () => vscode.workspace.getConfiguration("relateBugFinder");
 
 export async function activate(ctx: vscode.ExtensionContext) {
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (!folder) return;
   root = folder.uri.fsPath;
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
-  status.command = "blastRadius.showPanel";
-  status.text = "$(sync~spin) Blast Radius: indexing…";
+  status.command = "relateBugFinder.showPanel";
+  status.text = "$(sync~spin) Relate Bug Finder: indexing…";
   status.show();
   ctx.subscriptions.push(status, out);
 
@@ -52,10 +52,10 @@ export async function activate(ctx: vscode.ExtensionContext) {
       graph = CodeGraph.open(dbFile);
     } catch (e) {
       if (attempt >= 10) {
-        status.text = "$(error) Blast Radius: graph locked";
+        status.text = "$(error) Relate Bug Finder: graph locked";
         log(`open failed: ${(e as Error).message}`);
         const pick = await vscode.window.showErrorMessage(
-          "Blast Radius can't open its graph file because another process holds it (another VS Code window on this folder, or a running blast-radius CLI/MCP process). Close it, then retry.",
+          "Relate Bug Finder can't open its graph file because another process holds it (another VS Code window on this folder, or a running relate-bug-finder CLI/MCP process). Close it, then retry.",
           "Retry"
         );
         if (pick === "Retry") {
@@ -64,7 +64,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
         }
         return;
       }
-      status.text = `$(sync~spin) Blast Radius: waiting for graph lock (${attempt})…`;
+      status.text = `$(sync~spin) Relate Bug Finder: waiting for graph lock (${attempt})…`;
       await new Promise((r) => setTimeout(r, 1500));
     }
   }
@@ -76,13 +76,13 @@ export async function activate(ctx: vscode.ExtensionContext) {
   });
   const reindex = () =>
     serial(async () => {
-      status.text = "$(sync~spin) Blast Radius: indexing…";
+      status.text = "$(sync~spin) Relate Bug Finder: indexing…";
       const s = await ws!.fullIndex();
       ready = true;
       log(`Indexed ${s.files} files, ${s.functions} functions, ${s.calls} call edges, ${s.gitCommits} commits in ${s.ms}ms`);
       if (s.pythonSkipped) log(`Python skipped: ${s.pythonSkipped}`);
       status.text = `$(pulse) ${s.functions} fns · ${s.calls} calls`;
-      status.tooltip = `Blast Radius graph (Relate): ${s.files} files indexed in ${s.ms}ms. Click to open the panel.`;
+      status.tooltip = `Relate Bug Finder graph (Relate): ${s.files} files indexed in ${s.ms}ms. Click to open the panel.`;
       changed.fire();
     });
   reindex().catch((e) => log(`index failed: ${e.stack ?? e}`));
@@ -140,8 +140,8 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
   // ---- commands -----------------------------------------------------------------
   ctx.subscriptions.push(
-    vscode.commands.registerCommand("blastRadius.reindex", () => reindex()),
-    vscode.commands.registerCommand("blastRadius.showPanel", async () => {
+    vscode.commands.registerCommand("relateBugFinder.reindex", () => reindex()),
+    vscode.commands.registerCommand("relateBugFinder.showPanel", async () => {
       const clip = await vscode.env.clipboard.readText();
       BlastPanel.show(ctx.extensionUri, onPanelMsg, {
         mode: "welcome",
@@ -149,17 +149,17 @@ export async function activate(ctx: vscode.ExtensionContext) {
         clipboard: parseStackTrace(clip).frames.length ? clip : "",
       });
     }),
-    vscode.commands.registerCommand("blastRadius.traceError", async (text?: string) => {
+    vscode.commands.registerCommand("relateBugFinder.traceError", async (text?: string) => {
       if (typeof text !== "string" || !text) {
         const ed = vscode.window.activeTextEditor;
         const sel = ed && !ed.selection.isEmpty ? ed.document.getText(ed.selection) : "";
         const clip = await vscode.env.clipboard.readText();
         text = parseStackTrace(sel).frames.length ? sel : parseStackTrace(clip).frames.length ? clip : "";
       }
-      if (!text) return vscode.commands.executeCommand("blastRadius.showPanel");
+      if (!text) return vscode.commands.executeCommand("relateBugFinder.showPanel");
       return showTrace(ctx, text);
     }),
-    vscode.commands.registerCommand("blastRadius.blastRadius", async (target?: string) => {
+    vscode.commands.registerCommand("relateBugFinder.blastRadius", async (target?: string) => {
       if (!target) {
         const ed = vscode.window.activeTextEditor;
         if (!ed) return;
@@ -168,8 +168,8 @@ export async function activate(ctx: vscode.ExtensionContext) {
       }
       return showBlast(ctx, target);
     }),
-    vscode.commands.registerCommand("blastRadius.setupMcp", () => writeMcpConfigs(ctx)),
-    vscode.commands.registerCommand("blastRadius.showLog", () => out.show())
+    vscode.commands.registerCommand("relateBugFinder.setupMcp", () => writeMcpConfigs(ctx)),
+    vscode.commands.registerCommand("relateBugFinder.showLog", () => out.show())
   );
 
   // ---- CodeLens: "↑ 3 callers · 12 transitive · changed 3h ago" ----------------
@@ -196,7 +196,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
                 return new vscode.CodeLens(new vscode.Range(f.startLine - 1, 0, f.startLine - 1, 0), {
                   title: parts.join(" · "),
                   tooltip: "Show blast radius (who breaks if this changes)",
-                  command: "blastRadius.blastRadius",
+                  command: "relateBugFinder.blastRadius",
                   arguments: [f.id],
                 });
               });
@@ -230,7 +230,7 @@ let panelHandler: (m: PanelMsg) => void = () => undefined;
 let lastFailure: { text: string; command: string; cwd?: string; shellPath?: string } | undefined;
 
 async function showTrace(ctx: vscode.ExtensionContext, text: string) {
-  if (!ready) return void vscode.window.showWarningMessage("Blast Radius is still indexing…");
+  if (!ready) return void vscode.window.showWarningMessage("Relate Bug Finder is still indexing…");
   const result = await serial(() => traceSuspects(graph!, root, text, cfg().get<number>("maxSuspects") ?? 10));
   const command = lastFailure && lastFailure.text === text ? lastFailure.command : undefined;
   BlastPanel.show(ctx.extensionUri, panelHandler, { mode: "trace", result, input: text, command });
@@ -256,7 +256,7 @@ Only continue if re-running it is safe (no deploys, payments or data changes).`,
   if (go !== "Re-run with recording") return void BlastPanel.show(ctx.extensionUri, panelHandler, { mode: "trace", result: await serial(() => traceSuspects(graph!, root, f.text, cfg().get<number>("maxSuspects") ?? 10)), input: f.text, command: f.command });
   const t0 = Date.now();
   const pyEnv = await projectPyEnv();
-  const res = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Blast Radius: deep trace", cancellable: true }, async (p, token) => {
+  const res = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Relate Bug Finder: deep trace", cancellable: true }, async (p, token) => {
     p.report({ message: `re-running ${f.command}` });
     const stop = new AbortController();
     token.onCancellationRequested(() => stop.abort());
@@ -297,7 +297,7 @@ function describeEnv(res: DeepTraceResult): string {
 let runOutput: vscode.OutputChannel | undefined;
 /** Show the re-run's own output, so a failure to start (wrong env, missing tool) is visible. */
 function showRunOutput(text: string) {
-  runOutput ??= vscode.window.createOutputChannel("Blast Radius: deep trace run");
+  runOutput ??= vscode.window.createOutputChannel("Relate Bug Finder: deep trace run");
   runOutput.clear();
   runOutput.append(text.slice(-200_000));
   runOutput.show(true);
@@ -343,7 +343,7 @@ async function compareTests(ctx: vscode.ExtensionContext) {
     return show({ ...d.deep, canCompare: false });
   }
   const go = await vscode.window.showWarningMessage(
-    `Blast Radius will run ${cmds.length} related test${cmds.length === 1 ? "" : "s"} with the recorder attached:\n\n${cmds.join("\n")}\n\nOnly continue if running your tests is safe.`,
+    `Relate Bug Finder will run ${cmds.length} related test${cmds.length === 1 ? "" : "s"} with the recorder attached:\n\n${cmds.join("\n")}\n\nOnly continue if running your tests is safe.`,
     { modal: true },
     "Run related tests"
   );
@@ -352,7 +352,7 @@ async function compareTests(ctx: vscode.ExtensionContext) {
   let passed = 0, ran = 0, cancelled = false;
   const pyEnv = await projectPyEnv();
   const failures: string[] = [];
-  await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Blast Radius: related passing tests", cancellable: true }, async (p, token) => {
+  await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Relate Bug Finder: related passing tests", cancellable: true }, async (p, token) => {
     const stop = new AbortController();
     token.onCancellationRequested(() => stop.abort());
     for (let i = 0; i < cmds.length && !stop.signal.aborted; i++) {
@@ -380,7 +380,7 @@ async function compareTests(ctx: vscode.ExtensionContext) {
 }
 
 async function showBlast(ctx: vscode.ExtensionContext, target: string) {
-  if (!ready) return void vscode.window.showWarningMessage("Blast Radius is still indexing…");
+  if (!ready) return void vscode.window.showWarningMessage("Relate Bug Finder is still indexing…");
   const result = await serial(() => blastRadius(graph!, root, target));
   BlastPanel.show(ctx.extensionUri, panelHandler, result ? { mode: "blast", result } : { mode: "error", message: `Nothing in the graph matches "${target}".` });
 }
@@ -491,7 +491,7 @@ function setupTerminal(ctx: vscode.ExtensionContext) {
       provideTerminalLinks(c) {
         if (!/^\s*(?:[\w.]*(?:Error|Exception)\b|Traceback \(most recent call last\))/.test(c.line)) return [];
         const start = c.line.search(/\S/);
-        return [{ startIndex: start, length: c.line.trimEnd().length - start, tooltip: "Blast Radius: find the root-cause suspects", terminal: c.terminal } as vscode.TerminalLink & { terminal: vscode.Terminal }];
+        return [{ startIndex: start, length: c.line.trimEnd().length - start, tooltip: "Relate Bug Finder: find the root-cause suspects", terminal: c.terminal } as vscode.TerminalLink & { terminal: vscode.Terminal }];
       },
       handleTerminalLink(link: vscode.TerminalLink & { terminal?: vscode.Terminal }) {
         const buf = (link.terminal && buffers.get(link.terminal)) || "";
@@ -518,10 +518,10 @@ function registerMcpProvider(ctx: vscode.ExtensionContext) {
   const lm = vscode.lm as typeof vscode.lm & { registerMcpServerDefinitionProvider?: typeof vscode.lm.registerMcpServerDefinitionProvider };
   if (!lm.registerMcpServerDefinitionProvider) return;
   ctx.subscriptions.push(
-    lm.registerMcpServerDefinitionProvider("blastRadius.mcp", {
+    lm.registerMcpServerDefinitionProvider("relateBugFinder.mcp", {
       provideMcpServerDefinitions: () => [
         // VS Code's own runtime doubles as Node, so users don't even need Node installed.
-        new vscode.McpStdioServerDefinition("Blast Radius", process.execPath, mcpCommand(ctx).args, { ELECTRON_RUN_AS_NODE: "1" }, "0.1.0"),
+        new vscode.McpStdioServerDefinition("Relate Bug Finder", process.execPath, mcpCommand(ctx).args, { ELECTRON_RUN_AS_NODE: "1" }, "0.1.0"),
       ],
     })
   );
@@ -534,7 +534,7 @@ async function writeMcpConfigs(ctx: vscode.ExtensionContext) {
     { file: path.join(root, ".mcp.json"), label: "Claude Code (.mcp.json)", key: "mcpServers" },
     { file: path.join(root, ".cursor", "mcp.json"), label: "Cursor (.cursor/mcp.json)", key: "mcpServers" },
   ];
-  const picks = await vscode.window.showQuickPick(targets.map((t) => ({ label: t.label, picked: true, t })), { canPickMany: true, title: "Register the Blast Radius MCP server for…" });
+  const picks = await vscode.window.showQuickPick(targets.map((t) => ({ label: t.label, picked: true, t })), { canPickMany: true, title: "Register the Relate Bug Finder MCP server for…" });
   if (!picks?.length) return;
   for (const { t } of picks) {
     let json: Record<string, Record<string, unknown>> = {};
@@ -543,11 +543,11 @@ async function writeMcpConfigs(ctx: vscode.ExtensionContext) {
     } catch {
       /* new file */
     }
-    json[t.key] = { ...(json[t.key] ?? {}), "blast-radius": entry };
+    json[t.key] = { ...(json[t.key] ?? {}), "relate-bug-finder": entry };
     fs.mkdirSync(path.dirname(t.file), { recursive: true });
     fs.writeFileSync(t.file, JSON.stringify(json, null, 2) + "\n");
   }
-  void vscode.window.showInformationMessage(`Blast Radius MCP registered for ${picks.map((p) => p.t.label).join(", ")}. Copilot picks it up automatically.`);
+  void vscode.window.showInformationMessage(`Relate Bug Finder MCP registered for ${picks.map((p) => p.t.label).join(", ")}. Copilot picks it up automatically.`);
 }
 
 function ensureGitignore(root: string) {

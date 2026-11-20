@@ -6,7 +6,7 @@
  * Indexes the workspace exactly as the extension would (in memory), with the clock pinned to the moment
  * the bug was hit, then ranks functions four ways and reports where the truly-fixed function lands:
  *
- *   blast   Blast Radius (stack + call graph + function-level git recency + value origin)
+ *   blast   Relate Bug Finder (stack + call graph + function-level git recency + value origin)
  *   stack   read the stack trace top-down (crash site first)
  *   sentry  stack frames only, most recently changed first (Sentry "suspect commits" style)
  *   recent  every function, most recently changed first (ignores the trace)

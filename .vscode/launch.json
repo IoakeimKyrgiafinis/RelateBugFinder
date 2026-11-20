@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Run Blast Radius on demo-shop",
+      "name": "Run Relate Bug Finder on demo-shop",
       "type": "extensionHost",
       "request": "launch",
       "args": ["--extensionDevelopmentPath=${workspaceFolder}", "${workspaceFolder}/demo-shop"],

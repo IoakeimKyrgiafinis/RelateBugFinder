@@ -17,4 +17,4 @@ Click **Deep trace** → the confirm dialog shows the exact command → under a 
 
 **1:30–1:50 · Agents get the graph.** Copilot agent mode (or Claude Code): *"What breaks if I change lookupCoupon's return type?"* → it calls `get_blast_radius` instantly. Then *"Which functions ran in the failing test but not the passing one?"* → `query_codegraph` writes Cypher over `(:Run)-[:EXECUTED]->(:Function)`.
 
-**1:50–2:00 · Close.** On screen: the held-out benchmark line, "Right function at #1: stack 20% → Blast Radius 31% → with Deep trace 44% (114 real Python bugs)". Say: "One `.rl` file. Relate embedded in the editor. No server." Show `.vscode/codegraph.rl` in the explorer.
+**1:50–2:00 · Close.** On screen: the held-out benchmark line, "Right function at #1: stack 20% → Relate Bug Finder 31% → with Deep trace 44% (114 real Python bugs)". Say: "One `.rl` file. Relate embedded in the editor. No server." Show `.vscode/codegraph.rl` in the explorer.

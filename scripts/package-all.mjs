@@ -14,7 +14,7 @@ for (const [os, cpu] of targets) {
   fs.rmSync("node_modules/@koromix", { recursive: true, force: true });
   for (const d of fs.readdirSync("node_modules/@relate")) if (d.startsWith("relate-") && d !== "relate-wasm") fs.rmSync(`node_modules/@relate/${d}`, { recursive: true, force: true });
   sh(`npm install --no-save --force --os=${os} --cpu=${cpu} @relate/relate-${t}@${v} @koromix/koffi-${t}@${kv}`);
-  sh(`npx vsce package --target ${t} -o dist-vsix/blast-radius-${t}.vsix`);
+  sh(`npx vsce package --target ${t} -o dist-vsix/relate-bug-finder-${t}.vsix`);
 }
 // restore host binaries
 sh("npm install --no-save --force");

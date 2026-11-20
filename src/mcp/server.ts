@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Blast-Radius MCP server (stdio).
+ * Relate Bug Finder MCP server (stdio).
  *
  *   node dist/mcp.js --root /path/to/workspace
  *
@@ -23,7 +23,7 @@ function arg(name: string): string | undefined {
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
 const ROOT = path.resolve(arg("root") ?? process.env.CODEGRAPH_ROOT ?? process.cwd());
-const log = (m: string) => process.stderr.write(`[blast-radius] ${m}\n`);
+const log = (m: string) => process.stderr.write(`[relate-bug-finder] ${m}\n`);
 
 function viaBridge(name: string, args: unknown): Promise<unknown> {
   let info: BridgeInfo;
@@ -92,7 +92,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<un
 }
 
 async function main() {
-  const server = new McpServer({ name: "blast-radius", version: "0.1.0" });
+  const server = new McpServer({ name: "relate-bug-finder", version: "0.1.0" });
   for (const t of TOOLS) {
     const shape: Record<string, z.ZodTypeAny> = {};
     for (const [k, p] of Object.entries(t.params)) {

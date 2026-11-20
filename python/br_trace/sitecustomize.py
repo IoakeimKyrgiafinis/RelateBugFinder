@@ -1,4 +1,4 @@
-"""Blast Radius "Deep trace" recorder for Python.
+"""Relate Bug Finder "Deep trace" recorder for Python.
 
 Loaded automatically at interpreter startup when this folder is first on PYTHONPATH (Python imports any
 `sitecustomize` module it finds). It does nothing unless BR_TRACE_OUT is set. Then, for functions *of the
@@ -138,7 +138,7 @@ if _out:
             return False
         for tid in (mon.PROFILER_ID, 3, 4):
             try:
-                mon.use_tool_id(tid, "blast-radius")
+                mon.use_tool_id(tid, "relate-bug-finder")
                 _tool[0] = tid
                 break
             except ValueError:

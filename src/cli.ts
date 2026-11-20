@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * blast-radius CLI — same engine as the VS Code extension.
- *   blast-radius index   [root]
- *   blast-radius trace   [root] < stacktrace.txt
- *   blast-radius blast   [root] <file|file:line|symbol>
- *   blast-radius cycles  [root]
- *   blast-radius recent  [root] [hours]
- *   blast-radius cypher  [root] "<read-only cypher>"
+ * relate-bug-finder CLI — same engine as the VS Code extension.
+ *   relate-bug-finder index   [root]
+ *   relate-bug-finder trace   [root] < stacktrace.txt
+ *   relate-bug-finder blast   [root] <file|file:line|symbol>
+ *   relate-bug-finder cycles  [root]
+ *   relate-bug-finder recent  [root] [hours]
+ *   relate-bug-finder cypher  [root] "<read-only cypher>"
  */
 import * as fs from "fs";
 import * as path from "path";
@@ -22,7 +22,7 @@ async function main() {
   const [cmd, rootArg, ...rest] = process.argv.slice(2);
   const root = path.resolve(rootArg ?? ".");
   if (!cmd) {
-    console.log("usage: blast-radius <index|trace|blast|cycles|recent|cypher> [root] [...]");
+    console.log("usage: relate-bug-finder <index|trace|blast|cycles|recent|cypher> [root] [...]");
     process.exit(1);
   }
   fs.mkdirSync(path.join(root, ".vscode"), { recursive: true });

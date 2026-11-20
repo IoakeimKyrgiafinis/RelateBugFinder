@@ -1,4 +1,4 @@
-"""Blast-Radius Python indexer.
+"""Relate Bug Finder Python indexer.
 
 Reads JSON {"root": str, "files": [relPath, ...]} on stdin, writes one JSON object per file
 (same shape as the TS indexer's ParsedFile) as a JSON array on stdout. Pure stdlib.
