@@ -2,22 +2,24 @@
 
 ## Checklist (from the Official Rules)
 
-- [ ] **Public GitHub repo** `IoakeimKyrgiafinis/blast-radius`, with the Apache-2.0 license (included)
+- [ ] **Public GitHub repo** `IoakeimKyrgiafinis/RelateBugFinder`, with the Apache-2.0 license (included)
 - [ ] **Topic `relate` on the repo (required)**, plus `relate-neo4j-hackathon` (recommended). It must stay public and tagged through judging and the winner announcement (Dec 17).
 - [ ] **Setup instructions** a judge can follow: README → "Try it in 3 minutes". Test them on a clean machine, ideally on Windows too.
-- [ ] **Release with the 5 `.vsix` files** so judges can skip the build (`npm run package:all`)
+- [x] **5 `.vsix` files built** in `dist-vsix/` (`npm run package:all`); the release is created by `scripts\publish.ps1`
+- [x] **Setup from a fresh clone tested** (Option B, CLI, demo, `npm test`) on Windows 11
 - [ ] **Demo video ≤ 2 minutes**, recorded and edited by you, viewable without a login (YouTube unlisted works). Shot list: `demo/VIDEO_SCRIPT.md`. Use only music you have rights to. Run `npm run demo` again just before recording, so the "3h ago" is fresh.
 - [ ] **Statement of Relate capabilities, third-party tools and AI tools**: README "Built with" section. **Check the AI paragraph so it's accurate.**
-- [x] GitHub user filled in README.md and package.json (`IoakeimKyrgiafinis`; change it if the repo lives elsewhere)
+- [x] Repo URL filled in README.md and package.json (`IoakeimKyrgiafinis/RelateBugFinder`)
 - [ ] Submit before **Fri Dec 11, 2026, 6:00 PM PST** (= Sat Dec 12, 04:00 Athens time)
 
-```bash
-# one-time publish (GitHub CLI)
-gh repo create blast-radius --public --source . --push
-gh repo edit --add-topic relate --add-topic relate-neo4j-hackathon --add-topic vscode-extension --add-topic mcp
-npm run package:all
-gh release create v0.1.0 dist-vsix/*.vsix --title "Blast Radius v0.1.0" --notes "Install: code --install-extension blast-radius-<platform>.vsix"
+One-time publish (GitHub CLI; the 5 VSIX files are already built in `dist-vsix/`):
+
+```powershell
+gh auth login
+powershell -ExecutionPolicy Bypass -File scripts\publish.ps1
 ```
+
+It creates the public repo `RelateBugFinder` with a description starting "Neo4j-Relate-Hackathon entry", adds the topics `relate` (required), `relate-neo4j-hackathon`, `neo4j`, `vscode-extension`, `mcp` and `debugging`, and publishes release v0.1.0 with the VSIX files and `scripts/release-notes.md`. If you change the code afterwards, run `npm run package:all` again first.
 
 ---
 

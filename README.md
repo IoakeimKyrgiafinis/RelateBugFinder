@@ -99,11 +99,11 @@ Relate allows **one writer per `.rl` file**, and the extension holds it. The MCP
 
 **Option A: install the prebuilt extension (no build step)**
 
-1. Download the `.vsix` for your platform from [Releases](https://github.com/IoakeimKyrgiafinis/blast-radius/releases) (`darwin-arm64` = Apple Silicon, `darwin-x64`, `win32-x64`, `linux-x64`, `linux-arm64`).
+1. Download the `.vsix` for your platform from [Releases](https://github.com/IoakeimKyrgiafinis/RelateBugFinder/releases) (`darwin-arm64` = Apple Silicon, `darwin-x64`, `win32-x64`, `linux-x64`, `linux-arm64`).
 2. `code --install-extension blast-radius-<platform>.vsix`
 3. Create the demo project and open it:
    ```bash
-   git clone https://github.com/IoakeimKyrgiafinis/blast-radius && cd blast-radius
+   git clone https://github.com/IoakeimKyrgiafinis/RelateBugFinder && cd RelateBugFinder
    node demo/setup-demo.mjs demo-shop
    code demo-shop
    ```
@@ -111,7 +111,7 @@ Relate allows **one writer per `.rl` file**, and the extension holds it. The MCP
 **Option B: run from source**
 
 ```bash
-git clone https://github.com/IoakeimKyrgiafinis/blast-radius && cd blast-radius
+git clone https://github.com/IoakeimKyrgiafinis/RelateBugFinder && cd RelateBugFinder
 npm install && npm run build
 npm run demo            # creates ./demo-shop with a bug hidden in git history
 code .                  # press F5: a new VS Code window opens on demo-shop with the extension loaded
@@ -140,7 +140,7 @@ node dist/cli.js cypher demo-shop "MATCH (c:Commit)-[:TOUCHED]->(f) RETURN c.aut
 MCP for Claude Code from a terminal:
 
 ```bash
-claude mcp add blast-radius -- node /abs/path/blast-radius/dist/mcp.js --root /abs/path/your-project
+claude mcp add blast-radius -- node /abs/path/RelateBugFinder/dist/mcp.js --root /abs/path/your-project
 ```
 
 ## Tests
