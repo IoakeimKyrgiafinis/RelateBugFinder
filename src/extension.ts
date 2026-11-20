@@ -422,7 +422,10 @@ let ranDecoration: vscode.TextEditorDecorationType | undefined;
 async function openAt(file: string, line: number, lines?: number[]) {
   const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(path.join(root, file)));
   const pos = new vscode.Position(Math.max(0, line - 1), 0);
-  const editor = await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One, selection: new vscode.Range(pos, pos) });
+  // Never open the file on top of the panel: when the panel sits in the first column (no editor was open
+  // when it appeared), open the file in the second one, beside it.
+  const viewColumn = BlastPanel.column() === vscode.ViewColumn.One ? vscode.ViewColumn.Two : vscode.ViewColumn.One;
+  const editor = await vscode.window.showTextDocument(doc, { viewColumn, selection: new vscode.Range(pos, pos) });
   if (!editor?.setDecorations || !vscode.window.createTextEditorDecorationType) return;
   ranDecoration ??= vscode.window.createTextEditorDecorationType({
     isWholeLine: true,

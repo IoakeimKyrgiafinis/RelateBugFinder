@@ -46,13 +46,13 @@ const vscode = {
   CodeLens: class { constructor(range, command) { this.range = range; this.command = command; } },
   RelativePattern: class { constructor(b, p) { this.base = b; this.pattern = p; } },
   McpStdioServerDefinition: class { constructor(label, command, args, env, version) { Object.assign(this, { label, command, args, env, version }); } },
-  StatusBarAlignment: { Left: 1 }, ViewColumn: { One: 1, Beside: -2 }, ProgressLocation: { Notification: 15 }, OverviewRulerLane: { Left: 1 },
+  StatusBarAlignment: { Left: 1 }, ViewColumn: { One: 1, Two: 2, Beside: -2 }, ProgressLocation: { Notification: 15 }, OverviewRulerLane: { Left: 1 },
   ThemeColor: class { constructor(id) { this.id = id; } },
   window: {
     createOutputChannel: () => ({ appendLine: (m) => process.env.VERBOSE && console.log("   log:", m), show() {}, dispose() {} }),
     createStatusBarItem: () => ({ show() {}, dispose() {}, text: "" }),
     createWebviewPanel: () => {
-      const p = { posted: [], recv: null, webview: { html: "", asWebviewUri: (u) => u, cspSource: "", postMessage: async (m) => p.posted.push(m), onDidReceiveMessage: (f) => (p.webview.recv = f) }, reveal() {}, onDidDispose() {} };
+      const p = { viewColumn: 1 /* panel in the first column, as when no editor was open */, posted: [], recv: null, webview: { html: "", asWebviewUri: (u) => u, cspSource: "", postMessage: async (m) => p.posted.push(m), onDidReceiveMessage: (f) => (p.webview.recv = f) }, reveal() {}, onDidDispose() {} };
       panels.push(p);
       return p;
     },
@@ -61,7 +61,7 @@ const vscode = {
     showInformationMessage: async (text) => (dialogs.push({ text, items: [] }), undefined),
     showErrorMessage: async (text) => (dialogs.push({ text, items: [] }), undefined),
     withProgress: async (_o, f) => f({ report() {} }, { onCancellationRequested() {} }),
-    showTextDocument: async (doc) => ({ document: doc, setDecorations: (_t, ranges) => decorated.push({ file: doc.uri.fsPath, lines: ranges.map((r) => r.a.line + 1) }) }),
+    showTextDocument: async (doc, opts) => ({ document: doc, setDecorations: (_t, ranges) => decorated.push({ file: doc.uri.fsPath, column: opts?.viewColumn, lines: ranges.map((r) => r.a.line + 1) }) }),
     createTextEditorDecorationType: (o) => ({ ...o, dispose() {} }),
     onDidStartTerminalShellExecution: (f) => (handlers.start.push(f), disposable),
     onDidEndTerminalShellExecution: (f) => (handlers.end.push(f), disposable),
@@ -169,6 +169,7 @@ const ctx = { subscriptions: [], extensionPath: path.join(__dirname, ".."), exte
   await panel.webview.recv(openMsg);
   await until(() => decorated.length, 3000, "editor decoration");
   assert.deepStrictEqual(decorated.at(-1).lines, [22], "editor should highlight line 22");
+  assert.strictEqual(decorated.at(-1).column, 2, "the file should open beside the panel (column 2), not on top of it");
   ok(`order_total: "${card.querySelector(".lines").textContent.trim()}" → click opens billing/orders.py:22 with line 22 highlighted`);
 
   // "Ask AI to fix": the prompt carries the returned value, the highlighted lines, and the suspects' code.

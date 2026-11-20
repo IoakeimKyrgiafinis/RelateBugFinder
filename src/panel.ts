@@ -37,6 +37,11 @@ export class BlastPanel {
   private state: PanelState = { mode: "welcome" };
   private ready = false;
 
+  /** The editor column the panel is in, if it's open. */
+  static column(): vscode.ViewColumn | undefined {
+    return BlastPanel.current?.panel.viewColumn;
+  }
+
   static show(extUri: vscode.Uri, onMsg: (m: PanelMsg) => void, state?: PanelState): BlastPanel {
     if (!BlastPanel.current) BlastPanel.current = new BlastPanel(extUri, onMsg);
     else BlastPanel.current.panel.reveal(vscode.ViewColumn.Beside, true);
