@@ -39,7 +39,7 @@
     "zod": "^4.6.7"
   },
   "displayName": "Blast Radius — Error Trace & Impact Graph",
-  "publisher": "your-publisher-id",
+  "publisher": "ioakeimkyrgiafinis",
   "engines": {
     "vscode": "^1.101.0",
     "node": ">=18"
@@ -164,7 +164,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/YOUR_USER/blast-radius"
+    "url": "https://github.com/IoakeimKyrgiafinis/blast-radius"
   },
   "icon": "media/icon.png",
   "galleryBanner": {

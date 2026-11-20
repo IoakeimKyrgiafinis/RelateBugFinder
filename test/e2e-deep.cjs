@@ -2,7 +2,7 @@
  *   failing terminal command → notification → panel → click "Deep trace" in the panel's own HTML (jsdom)
  *   → confirm → recorded re-run → click "Compare with related passing tests" → confirm → re-ranked panel,
  *   then ask the extension's live MCP bridge which (:Run) nodes are in the graph.
- * Usage: node test/e2e-deep.cjs   (builds its own throwaway Python project; needs python and git) */
+ * Usage: node test/e2e-deep.cjs   (builds demo-shop in a temp folder; needs python and git) */
 const Module = require("module");
 const path = require("path");
 const fs = require("fs");
@@ -20,22 +20,11 @@ const until = async (fn, ms = 20000, what = "condition") => {
 };
 const ok = (m) => console.log("  ✓ " + m);
 
-// ------------------------------------------------------------ the project: a bug in a helper that already returned
-const root = fs.mkdtempSync(path.join(os.tmpdir(), "br-e2e-deep-"));
-const w = (f, s) => { fs.mkdirSync(path.dirname(path.join(root, f)), { recursive: true }); fs.writeFileSync(path.join(root, f), s); };
-const pricing = (bulk) => ["def subtotal(qty):", "    return qty * 10", "", "def bulk_discount(total):", `    return ${bulk}`, "",
-  "def validate(total):", "    if total < 0:", "        raise ValueError('negative total: %s' % total)", "    return total", "",
-  "def order_total(qty):", "    total = subtotal(qty)", "    if qty > 5:", "        total = bulk_discount(total)", "    return validate(total)", ""].join("\n");
-w("pkg/__init__.py", ""); w("tests/__init__.py", "");
-w("pkg/pricing.py", pricing("total * 0.9"));
-w("tests/test_pricing.py", ["import unittest", "from pkg.pricing import order_total", "", "class PricingTest(unittest.TestCase):",
-  "    def test_bulk(self):", "        self.assertEqual(order_total(10), 90)", "", "    def test_small(self):", "        self.assertEqual(order_total(2), 20)", ""].join("\n"));
-w(".gitignore", ".vscode/\n__pycache__/\n");
-const git = (...a) => execFileSync("git", ["-c", "user.name=Demo", "-c", "user.email=demo@example.com", ...a], { cwd: root, stdio: "ignore" });
-git("init", "-q"); git("add", "-A"); git("commit", "-q", "-m", "Pricing", "--date", new Date(Date.now() - 20 * 864e5).toISOString());
-w("pkg/pricing.py", pricing("total - total * 1.1  # 10% off"));
-git("commit", "-q", "-am", "Simplify bulk discount");
-const COMMAND = "python -m unittest -q tests.test_pricing.PricingTest.test_bulk";
+// ------------------------------------------------------------ the project: the judges' demo (demo-shop), whose Python
+// scene has a bug in a helper that already returned before the error was raised
+const root = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "br-e2e-deep-")), "demo-shop");
+execFileSync(process.execPath, [path.join(__dirname, "..", "demo", "setup-demo.mjs"), root], { stdio: "ignore" });
+const COMMAND = "python -m unittest tests.test_orders.OrdersTest.test_bulk_order";
 const failing = spawnSync(COMMAND, { cwd: root, shell: true, encoding: "utf8" });
 assert.notStrictEqual(failing.status, 0, "the demo test should fail");
 const output = failing.stdout + failing.stderr;
@@ -112,8 +101,8 @@ const ctx = { subscriptions: [], extensionPath: path.join(__dirname, ".."), exte
 
 (async () => {
   await ext.activate(ctx);
-  await until(async () => (await handlers.lens[0].provideCodeLenses({ uri: { fsPath: path.join(root, "pkg/pricing.py") }, lineCount: 1e6 })).length > 0, 20000, "index");
-  ok("extension activated and indexed the Python project");
+  await until(async () => (await handlers.lens[0].provideCodeLenses({ uri: { fsPath: path.join(root, "billing/orders.py") }, lineCount: 1e6 })).length > 0, 20000, "index");
+  ok("extension activated and indexed demo-shop");
 
   // 1. The test fails in the terminal (shell integration reports the command line and cwd).
   const execution = { commandLine: { value: COMMAND }, cwd: { fsPath: root }, read: async function* () { yield output; } };
@@ -154,7 +143,7 @@ const ctx = { subscriptions: [], extensionPath: path.join(__dirname, ".."), exte
   const before2 = panel.posted.length;
   await panel.webview.recv({ type: ui.sent.at(-1).type });
   const confirm2 = await until(() => dialogs.find((d) => d.items.includes("Run related tests")), 10000, "compare dialog");
-  assert.ok(confirm2 && /PricingTest\.test_small/.test(confirm2.text), "confirm should list test_small");
+  assert.ok(confirm2 && /OrdersTest\.test_small_order/.test(confirm2.text), "confirm should list test_small_order");
   const s3 = await until(() => panel.posted.length > before2 && latest(panel).deep?.spectrum && latest(panel), 60000, "spectrum state");
   assert.deepStrictEqual([s3.deep.spectrum.tests, s3.deep.spectrum.passed], [1, 1]);
   const bd3 = s3.result.suspects.find((s) => shortName(s) === "bulk_discount");
@@ -169,17 +158,17 @@ const ctx = { subscriptions: [], extensionPath: path.join(__dirname, ".."), exte
   assert.strictEqual(shortName(s3.result.suspects[0]), "bulk_discount", "the function that returned the bad value should be #1");
   assert.ok(bd3.reasons[0].kind === "returned" && /-10\.000000000000014/.test(bd3.reasons[0].text));
   const ot = s3.result.suspects.find((s) => shortName(s) === "order_total");
-  assert.deepStrictEqual(ot.lines.failingOnly, [15], "order_total: only `total = bulk_discount(total)` ran only in the failure");
+  assert.deepStrictEqual(ot.lines.failingOnly, [22], "order_total: only `total = bulk_discount(total)` ran only in the failure");
   const card = [...ui.doc.querySelectorAll(".card")].find((c) => c.querySelector(".name").textContent.includes("order_total"));
   const lineLink = card.querySelector(".lines a");
   assert.ok(lineLink && /ran only in the failing test/.test(card.querySelector(".lines").textContent), "line block missing");
   lineLink.click();
   const openMsg = JSON.parse(JSON.stringify(ui.sent.at(-1)));
-  assert.deepStrictEqual([openMsg.type, openMsg.line, openMsg.lines], ["open", 15, [15]]);
+  assert.deepStrictEqual([openMsg.type, openMsg.line, openMsg.lines], ["open", 22, [22]]);
   await panel.webview.recv(openMsg);
   await until(() => decorated.length, 3000, "editor decoration");
-  assert.deepStrictEqual(decorated.at(-1).lines, [15], "editor should highlight line 15");
-  ok(`order_total: "${card.querySelector(".lines").textContent.trim()}" → click opens pkg/pricing.py:15 with line 15 highlighted`);
+  assert.deepStrictEqual(decorated.at(-1).lines, [22], "editor should highlight line 22");
+  ok(`order_total: "${card.querySelector(".lines").textContent.trim()}" → click opens billing/orders.py:22 with line 22 highlighted`);
 
   // "Ask AI to fix": the prompt carries the returned value, the highlighted lines, and the suspects' code.
   ui.doc.getElementById("ai").click();
@@ -188,9 +177,9 @@ const ctx = { subscriptions: [], extensionPath: path.join(__dirname, ".."), exte
   await panel.webview.recv(ask);
   await until(() => clipboard, 3000, "AI prompt");
   assert.match(clipboard, /Returned `-10\.000000000000014`/, "prompt should name the returned value");
-  assert.match(clipboard, /Lines that ran only in the failing test: 15/, "prompt should list the failing-only lines");
-  assert.match(clipboard, />> 15 +total = bulk_discount\(total\)/, "prompt should include the code with >> on line 15");
-  ok(`AI prompt includes the returned value, the lines, and the code: "${clipboard.split("\n").find((l) => l.startsWith(">> 15"))}"`);
+  assert.match(clipboard, /Lines that ran only in the failing test: 22/, "prompt should list the failing-only lines");
+  assert.match(clipboard, />> 22 +total = bulk_discount\(total\)/, "prompt should include the code with >> on line 22");
+  ok(`AI prompt includes the returned value, the lines, and the code: "${clipboard.split("\n").find((l) => l.startsWith(">> 22"))}"`);
 
   // 4. The runs are in the live graph: ask the extension's MCP bridge (read-only Cypher).
   const info = JSON.parse(fs.readFileSync(path.join(root, ".vscode", "codegraph.bridge.json"), "utf8"));
@@ -202,12 +191,12 @@ const ctx = { subscriptions: [], extensionPath: path.join(__dirname, ".."), exte
     req.on("error", reject); req.end(body);
   });
   const text = JSON.stringify(rows.result ?? rows);
-  assert.ok(/test_bulk/.test(text) && /test_small/.test(text), "both runs should be in the graph: " + text);
+  assert.ok(/test_bulk_order/.test(text) && /test_small_order/.test(text), "both runs should be in the graph: " + text);
   ok(`graph (via MCP bridge): ${text.slice(0, 400)}`);
 
   ctx.subscriptions.forEach((d) => d.dispose && d.dispose());
   ext.deactivate();
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(path.dirname(root), { recursive: true, force: true });
   console.log("\nDEEP-TRACE UI E2E CHECKS PASSED");
   process.exit(0);
 })().catch((e) => {

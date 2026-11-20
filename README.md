@@ -80,7 +80,7 @@ Blast radius ("what breaks if I change this?") and MCP tools for agents are usef
 |---|---|
 | **Auto-trace failed terminal commands** | With VS Code shell integration, when `npm test` / `pytest` / `node app.js` exits with a stack trace, a notification names the top suspect. One click opens the panel. |
 | **Where the undefined came from** | For `Cannot read properties of undefined/null`, Firefox/Safari equivalents and Python `'NoneType' object has no attribute …`, it reads the crash line, finds the expression that was empty (`coupon` in `coupon.pct`) and walks back to what produced it: a call (`const coupon = lookupCoupon(code)`, including destructuring and reassignment), a parameter the caller passed, a field, or an index lookup. The producing function becomes the top-weighted suspect. When a field was missing or empty (`'X' object has no attribute 'y'`, or the value came from `self.y` / `this.y`), the methods of that class that set `y` become suspects too. If no method sets it, the constructor does. That code already returned, so it is never on the stack. |
-| **Deep trace** (opt-in) | When the crash came from a terminal command, the panel offers to re-run it with a recorder attached (Python: `sys.settrace` via `PYTHONPATH`, no install, project code only; Node: built-in `NODE_V8_COVERAGE`). Which of your functions ran, how often, how close to the crash, which of their lines ran, and (Python) a safe summary of what they returned is stored as a `(:Run)` in Relate. Functions that ran just before the crash rank higher, and helpers that already returned (never on the stack) can join the suspects. **Who produced the bad value:** when the error names a value (an assertion's actual result such as `-10.0 != 90`, a number or key in the message, or `None`), the function that returned it first moves up. It always asks first, showing the exact command. It re-runs the way your terminal did: in the same shell (PowerShell, bash, …) and with your project's Python environment (VS Code's selected interpreter, or a `.venv`/`venv` in the project), and it can be cancelled. It works alongside coverage tools (`pytest --cov`) and debuggers: on Python 3.12+ through `sys.monitoring`; on older Pythons, calls and return values are still recorded if another tool takes over line tracing, and the panel says so. |
+| **Deep trace** (opt-in) | When the crash came from a terminal command, the panel offers to re-run it with a recorder attached (Python: a `sitecustomize` hook on `PYTHONPATH` using `sys.monitoring` on 3.12+ and `sys.setprofile`/`sys.settrace` before that, no install, project code only; Node: built-in `NODE_V8_COVERAGE`). Which of your functions ran, how often, how close to the crash, which of their lines ran, and (Python) a safe summary of what they returned is stored as a `(:Run)` in Relate. Functions that ran just before the crash rank higher, and helpers that already returned (never on the stack) can join the suspects. **Who produced the bad value:** when the error names a value (an assertion's actual result such as `-10.0 != 90`, a number or key in the message, or `None`), the function that returned it first moves up. It always asks first, showing the exact command. It re-runs the way your terminal did: in the same shell (PowerShell, bash, …) and with your project's Python environment (VS Code's selected interpreter, or a `.venv`/`venv` in the project), and it can be cancelled. It works alongside coverage tools (`pytest --cov`) and debuggers: on Python 3.12+ through `sys.monitoring`; on older Pythons, calls and return values are still recorded if another tool takes over line tracing, and the panel says so. |
 | **Lines, not just functions** | After a deep trace each suspect lists the lines that ran in the failing test; after comparing with passing tests, the lines that ran *only* in the failing test. Clicking highlights them in the editor. |
 | **Compare with related passing tests** (opt-in, Python) | After a deep trace, Cypher picks the test functions that call the code that ran just before the crash, runs them the same way (pytest or unittest) with the recorder, and stores them in the same session. Ochiai's spectrum score, computed in Cypher, then lowers functions that also run in passing tests. |
 | **Paste any trace** | `Blast Radius: Trace Error` (Ctrl/Cmd+Alt+T) uses the selection or clipboard. Parses Node/V8, Chrome/Firefox/Vite/webpack URLs, Python tracebacks, pytest, and `tsc` errors. Docker/CI paths are mapped by suffix. |
@@ -95,15 +95,15 @@ Relate allows **one writer per `.rl` file**, and the extension holds it. The MCP
 
 ## Try it in 3 minutes (judges start here)
 
-**Needs:** VS Code ≥ 1.101, Node.js ≥ 22.6 (to run the TypeScript demo directly), git. Python 3 is optional (for indexing `.py` files). Works on macOS, Windows and Linux.
+**Needs:** VS Code ≥ 1.101, Node.js ≥ 22.6 (to run the TypeScript demo directly), git. Python ≥ 3.8 for the Python scene (Deep trace); nothing to `pip install`. Works on macOS, Windows and Linux.
 
 **Option A: install the prebuilt extension (no build step)**
 
-1. Download the `.vsix` for your platform from [Releases](https://github.com/YOUR_USER/blast-radius/releases) (`darwin-arm64` = Apple Silicon, `darwin-x64`, `win32-x64`, `linux-x64`, `linux-arm64`).
+1. Download the `.vsix` for your platform from [Releases](https://github.com/IoakeimKyrgiafinis/blast-radius/releases) (`darwin-arm64` = Apple Silicon, `darwin-x64`, `win32-x64`, `linux-x64`, `linux-arm64`).
 2. `code --install-extension blast-radius-<platform>.vsix`
 3. Create the demo project and open it:
    ```bash
-   git clone https://github.com/YOUR_USER/blast-radius && cd blast-radius
+   git clone https://github.com/IoakeimKyrgiafinis/blast-radius && cd blast-radius
    node demo/setup-demo.mjs demo-shop
    code demo-shop
    ```
@@ -111,7 +111,7 @@ Relate allows **one writer per `.rl` file**, and the extension holds it. The MCP
 **Option B: run from source**
 
 ```bash
-git clone https://github.com/YOUR_USER/blast-radius && cd blast-radius
+git clone https://github.com/IoakeimKyrgiafinis/blast-radius && cd blast-radius
 npm install && npm run build
 npm run demo            # creates ./demo-shop with a bug hidden in git history
 code .                  # press F5: a new VS Code window opens on demo-shop with the extension loaded
@@ -119,10 +119,11 @@ code .                  # press F5: a new VS Code window opens on demo-shop with
 
 **Then, in demo-shop:**
 
-1. The status bar (bottom left) shows `20 fns · 20 calls` once indexing finishes (under a second).
-2. In the integrated terminal, run `npm start -- NOPE`. It crashes with `TypeError … reading 'pct'`. A notification says `"coupon" was undefined: it came from lookupCoupon()` and names it as the top suspect. Click **Show suspects**.
-3. Open `src/money.ts`. Click the CodeLens above `applyDiscount` to see its blast radius and the tests to run.
-4. Copilot agent mode lists the *Blast Radius* MCP tools automatically. For Claude Code or Cursor, run **Blast Radius: Register MCP Server**.
+1. The status bar (bottom left) shows `26 fns · 25 calls` once indexing finishes (under a second).
+2. **Off the stack, instantly.** In the integrated terminal, run `npm start -- NOPE`. It crashes with `TypeError … reading 'pct'`. A notification says `"coupon" was undefined: it came from lookupCoupon()` and names it as the top suspect. Click **Show suspects**.
+3. **Deep trace** (Python). Run `python -m unittest tests.test_orders.OrdersTest.test_bulk_order`. It fails with `ValueError: negative total: -10.000000000000014`, raised in `validate`. Show suspects: the changed helper `bulk_discount` is only #3, because it already returned. Click **Deep trace**, then confirm. The test re-runs with the recorder (under a second) and `bulk_discount` moves to **#1**: it *returned `-10.000000000000014`, the value in the error, before any other function did*. Click **Compare with related passing tests**: `test_small_order` passes without ever calling it, and `order_total` shows line 22 (`total = bulk_discount(total)`) as the only line that ran only in the failing test. Click it to see it highlighted.
+4. **Blast radius.** Open `src/money.ts`. Click the CodeLens above `applyDiscount` to see its blast radius and the tests to run.
+5. **Agents.** Copilot agent mode lists the *Blast Radius* MCP tools automatically. For Claude Code or Cursor, run **Blast Radius: Register MCP Server**.
 
 No shell integration in your terminal? Copy the error output and run **Blast Radius: Trace Error** (Ctrl/Cmd+Alt+T), which reads the clipboard.
 
@@ -157,11 +158,12 @@ npm test     # builds throwaway demos in your temp folder (never touches ./demo-
              #  · Deep trace end to end (Node V8 coverage, Python recorder) and spectrum ranking against a related passing test
              #  · Deep trace on a real machine: the project .venv, PowerShell/bash syntax, Cancel (kills the whole process tree),
              #    a fake coverage tool active (both recorder paths), and the messages for each way a re-run can go wrong
-             #  · the Deep trace UI flow: failing terminal command → panel → Deep trace and Compare buttons (real panel HTML
-             #    in jsdom) → confirmation dialogs → runs stored in the live graph, checked through the MCP bridge
+             #  · the judges' Python scene in demo-shop, through the UI: failing terminal command → panel → Deep trace and
+             #    Compare buttons (real panel HTML in jsdom) → confirmation dialogs → bulk_discount #3 → #1 → line 22
+             #    highlighted → AI prompt → runs stored in the live graph, checked through the MCP bridge
 ```
 
-Also verified by hand in real VS Code on Windows 11 (F5 → demo-shop → crash in the terminal → notification → panel).
+The TypeScript scene was also checked by hand in real VS Code on Windows 11 (F5 → demo-shop → crash in the terminal → notification → panel).
 
 Measured here: zod (525 files / 3,030 functions / 3,255 call edges) fully indexes in 2.9 s. psf/requests (37 files / 711 functions) in 0.5 s. Graph queries take 1–30 ms.
 
@@ -201,7 +203,7 @@ Where the gain comes from (all 114 bugs, full tables in [bench/RESULTS.md](bench
 **Deep trace** (`bench/deeptrace.mjs` re-runs each failing test with the same recorder the extension uses):
 * **Failing assertions:** #1 rises from 24% to 46% of bugs, top 3 from 27% to 51%. The stack stops in the test, but the recording shows which project functions the test actually exercised, which ran last, and which one returned the wrong value.
 * **Returned values** ("who produced the value in the error"): a recorded return value matched a value in the error in 24 of 114 bugs. Turning the signal on raises held-out MRR from 0.525 to 0.537 (#1: 44% → 46%) and dev MRR from 0.555 to 0.595. The weights were chosen on the dev half.
-* **Off-stack crashes:** 5 of 18 in the top 3 (up from 3), 4 at #1 (up from 1). These are functions that had already returned before the crash, so no stack-based method can see them.
+* **Off-stack crashes:** 5 of 18 in the top 3 (up from 3) and 3 at #1 (up from 1); comparing with passing tests makes it 4 at #1. These are functions that had already returned before the crash, so no stack-based method can see them.
 * **The cost:** the test runs once more (seconds for a single test). It is opt-in and always asks first.
 
 **Related passing tests** (spectrum-based fault localization):
@@ -261,11 +263,13 @@ code --install-extension dist-vsix/blast-radius-darwin-arm64.vsix
 - `@vscode/vsce`
 - `jsdom` (dev only)
 - git CLI
+- Python standard library only for the Deep trace recorder (`sys.monitoring`, `sys.setprofile`/`sys.settrace`)
+- Benchmark only, not shipped: the [BugsInPy](https://github.com/soarsmu/BugsInPy) dataset and the projects it references, and `uv` to build their environments
 
 All are open-source, used under their licenses. No pre-existing code of mine was reused. The project was started during the contest period (November 2026).
 
 **AI tools:** <!-- CHECK THIS before submitting: add what you did yourself, remove anything that isn't true -->
-This project was built with heavy use of Claude (Anthropic). Claude wrote nearly all of the code, tests and documentation: first in a claude.ai conversation (the initial implementation, tested in a cloud sandbox), then in Claude Code on my own machine (running the extension in real VS Code on Windows, a code review, and fixes such as the MCP fallback that wiped git history and held the graph's file lock). I chose the idea and the hackathon, set the scope and priorities, decided which findings to act on, and tested the extension in VS Code myself. The demo video is my own recording.
+This project was built with heavy use of Claude (Anthropic). Claude wrote nearly all of the code, tests, benchmark scripts and documentation: first in a claude.ai conversation (the initial implementation, tested in a cloud sandbox), then in Claude Code (Claude Opus 5.5) on my own machine. That included running the extension in real VS Code on Windows, a code review and its fixes, the BugsInPy benchmark with its dev/held-out split, Deep trace (the Python recorder, return values, line coverage, comparing with passing tests) and measuring its overhead. Ideas that didn't help on the benchmark (plain Ochiai, a "newest change wins" bonus) were measured and left out. I chose the idea and the hackathon, set the scope and priorities (for example, focusing the evaluation on Python), decided which proposed improvements to build, and tested the extension in VS Code myself. The demo video is my own recording.
 
 ## Roadmap
 
